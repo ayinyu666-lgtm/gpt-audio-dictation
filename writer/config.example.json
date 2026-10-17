@@ -1,0 +1,11 @@
+{
+  "port": 8799,
+  "rootDir": "",
+  "course": "",
+  "courses": [],
+  "fileNamePattern": "{date} {weekday} {time}",
+  "includeGerman": true,
+  "includeChinese": true,
+  "writeSessionHeader": true,
+  "_comment": "The first run can create config.json automatically. rootDir and courses are intentionally empty in the public example. The field names includeGerman and includeChinese are kept for backward compatibility: they control whether the raw transcript and the GPT answer are written."
+}

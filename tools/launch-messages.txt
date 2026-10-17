@@ -1,0 +1,27 @@
+[need_install]
+还差最后一步：扩展还没装进 Edge。
+
+启动器只能打开 ChatGPT，真正干活的是那个浏览器扩展。
+它只需要装一次，装完以后每次双击这个启动器就直接能用。
+
+接下来会打开 Edge 的扩展页，请照做：
+  1. 打开左下角的「开发人员模式」
+  2. 点「加载解压缩的扩展」
+  3. 在地址栏粘贴路径（已经复制到剪贴板了）：
+     {EXTDIR}
+  4. 选好文件夹后回到 ChatGPT 页面，刷新一次
+
+装完就不用再管了。以后双击启动器直接开始工作。
+
+[disabled]
+扩展已经装了，但现在是「已停用」状态。
+
+请在打开的扩展页里找到「GPT Audio Dictation」，把开关拨到右边打开，
+然后刷新 ChatGPT 页面。
+
+[need_install_console]
+The extension is not loaded into Edge yet - run install.bat once (see README).
+Extension folder: {EXTDIR}
+
+[disabled_console]
+The extension is installed but disabled - enable it at edge://extensions.

@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "GPT Audio Dictation",
+  "version": "1.2.0",
+  "description": "Automate ChatGPT web dictation, segment long audio, and archive paired transcripts locally. Windows-first.",
+  "homepage_url": "https://github.com/ayinyu666-lgtm/gpt-audio-dictation",
+  "minimum_chrome_version": "116",
+  "permissions": ["storage", "unlimitedStorage"],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "action": {
+    "default_title": "GPT Audio Dictation: show or hide the panel",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+      "js": ["page-hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+      "js": ["panel.js"],
+      "run_at": "document_idle",
+      "world": "ISOLATED",
+      "all_frames": false
+    }
+  ]
+}

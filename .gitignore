@@ -1,0 +1,23 @@
+# Local user data
+writer/config.json
+writer/config.json.bak
+writer/logs/
+.test-edge-profile/
+tmp/
+TODO.md
+
+# Build output
+dist/
+*.zip
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Node
+node_modules/
+npm-debug.log*
