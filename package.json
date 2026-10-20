@@ -1,6 +1,6 @@
 {
   "name": "gpt-audio-dictation",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "description": "ChatGPT web audio dictation automation with local-first transcript archiving.",
   "license": "MIT",

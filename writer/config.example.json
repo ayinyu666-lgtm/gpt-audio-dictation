@@ -3,6 +3,7 @@
   "rootDir": "",
   "course": "",
   "courses": [],
+  "subDir": "",
   "fileNamePattern": "{date} {weekday} {time}",
   "includeGerman": true,
   "includeChinese": true,

@@ -9,6 +9,7 @@ const jsFiles = [
   'extension/panel.js',
   'writer/writer.mjs',
   'tools/dev/cdp.mjs',
+  'tools/dev/append-conversation.mjs',
   'tools/dev/newtab.mjs',
   'tools/dev/probe.mjs',
   'tools/dev/shot.mjs',

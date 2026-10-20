@@ -20,6 +20,7 @@
 - 每次保存只读取对应的用户转录和紧随其后的 GPT 回答，不把积压段落全部写成最后一条回答。
 - 分类在段落开始时冻结；中途切换分类不会把旧段写进新目录。
 - 保存任务按 `saveId` 独立持久化，支持刷新、关闭标签页、扩展重载和服务暂时离线。
+- 长会话中的旧轮次即使被 ChatGPT 从页面 DOM 移走，也会使用精确/宽松文本指纹继续认领；一个匹配不到的任务不会堵住其他可保存段落。
 - 临时错误自动退避重试；不可自动解决的任务保留为失败状态，可在面板处理。
 - Windows 原生目录选择、可写探针、配置备份与恢复。
 - 本地 Markdown 写入使用内容摘要、重复检测、半段恢复和冲突保护。
@@ -120,6 +121,14 @@ http://127.0.0.1:8799
 
 文件名模板和是否写入原始转录、GPT 回答可在 `writer/config.json` 中调整。公开示例见 [`writer/config.example.json`](writer/config.example.json)。
 
+如果希望分类目录下再放一层子目录，可设置：
+
+```json
+"subDir": "原始录音"
+```
+
+留空时文件直接写入分类目录。
+
 ## 工作方式
 
 ```text
@@ -195,6 +204,12 @@ npm run pack
 - 完整 Windows 包
 - 仅扩展安装包
 
+从导出的会话 JSON 补齐已有 Markdown 的较新段落：
+
+```powershell
+node tools\dev\append-conversation.mjs conversation.json transcript.md
+```
+
 ## 配置
 
 配置示例：
@@ -207,7 +222,7 @@ Copy-Item writer\config.example.json writer\config.json
 
 ## 版本
 
-当前版本：`1.2.0`
+当前版本：`1.2.1`
 
 变更记录见 [`CHANGELOG.md`](CHANGELOG.md)。
 

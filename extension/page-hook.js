@@ -90,6 +90,8 @@
   const SAVE_QUEUE_STORAGE_KEY = 'gad.pageSaveQueue.v1';
   const SAVE_QUEUE_ITEM_PREFIX = 'gad.pageSaveJob.v1:';
   const SAVE_ANSWER_TIMEOUT_MS = 10 * 60 * 1000;
+  // 匹配不到对应轮次时的容忍时间：长会话被虚拟化后旧轮次会离开 DOM，这种段落等下去也没用
+  const SAVE_TURN_MISS_TIMEOUT_MS = 2 * 60 * 1000;
   const SAVE_ROUTE_MIGRATION_MAX_AGE_MS = 10 * 60 * 1000;
   let lastPersistedPageQueueIds = new Set();
   const queueRouteKey = (value) => {
@@ -140,6 +142,7 @@
         course: job.course || '',
         userOrdinal: Number(job.userOrdinal) || 0,
         userFingerprint: job.userFingerprint || '',
+        userLooseFingerprint: job.userLooseFingerprint || '',
         userFingerprintSource: job.userFingerprintSource || '',
         blocked: job.blocked === true,
         lastError: job.lastError || ''
@@ -328,6 +331,16 @@
           persistSaveQueue();
           log('warn', '第 ' + S.saveQueue[idx].index + ' 段落盘待重试：' + String(result.error || '未知原因'));
         }
+        break;
+      }
+      case 'clearBlockedSaves': {
+        // 长会话被虚拟化后，旧轮次离开 DOM，这些段落再也匹配不上了。
+        // 允许一键清掉这些永远不可能成功的记录，避免面板上挂着一长串失败。
+        const before = S.saveQueue.length;
+        S.saveQueue = S.saveQueue.filter((job) => !job.blocked);
+        persistSaveQueue();
+        postSaveQueueState(true);
+        log('info', '已清空 ' + (before - S.saveQueue.length) + ' 条失败记录');
         break;
       }
       case 'retryPageSaves': {
@@ -1089,6 +1102,21 @@
     return value.length + ':' + (hash >>> 0).toString(16);
   }
 
+  /*
+   * 宽松指纹：只保留字母数字、忽略大小写和标点空白。
+   * 输入框里的文本和真正发出去的消息常常差几个标点/空格，精确指纹会认不出来；
+   * 宽松指纹用来做第二层兜底。
+   */
+  function looseFingerprint(text) {
+    const value = String(text || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+    let hash = 2166136261;
+    for (let i = 0; i < value.length; i += 1) {
+      hash ^= value.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return value.length + ':' + (hash >>> 0).toString(16);
+  }
+
   const follows = (later, earlier) =>
     !!(earlier.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING);
 
@@ -1110,7 +1138,8 @@
         ordinal: index + 1,
         userText,
         answerText,
-        fingerprint: textFingerprint(userText)
+        fingerprint: textFingerprint(userText),
+        loose: looseFingerprint(userText)
       };
     });
   }
@@ -1158,12 +1187,16 @@
       ? Math.max(previousOrdinal + 1, turns.length)
       : Math.max(Math.max(0, userTurnBase || 0) + 1, turns.length);
     S.lastQueuedUserOrdinalByRoute[routeKey] = userOrdinal;
+    /*
+     * 会话一长，ChatGPT 会把旧轮次从 DOM 移走（实测这个会话只剩最近 10 轮）。
+     * 所以"第 N 轮"这种全局序号在页面上根本取不到，必须用文本指纹认领本段自己的消息。
+     * 优先用输入框里抓到的文本；抓不到就退回"窗口里最新的那条用户消息"——
+     * 刚发出去的段落一定在窗口末尾。
+     */
+    const lastTurn = turns.length ? turns[turns.length - 1] : null;
     const capturedFingerprint = S.pendingComposerText
       ? textFingerprint(S.pendingComposerText)
-      : '';
-    const knownTurn = capturedFingerprint
-      ? turns.find((turn) => turn.fingerprint === capturedFingerprint) || null
-      : (turns[userOrdinal - 1] || null);
+      : (lastTurn ? lastTurn.fingerprint : '');
     S.saveQueue.push({
       saveId,
       index: seg.index,
@@ -1178,8 +1211,9 @@
       // 分类在入队时冻结；之后切换分类不会把旧段写成新分类。
       course: String(seg.saveCourse || ''),
       userOrdinal,
-      userFingerprint: capturedFingerprint || (knownTurn ? knownTurn.fingerprint : ''),
-      userFingerprintSource: capturedFingerprint ? 'composer' : (knownTurn ? 'ordinal' : ''),
+      userFingerprint: capturedFingerprint,
+      userLooseFingerprint: S.pendingComposerText ? looseFingerprint(S.pendingComposerText) : (lastTurn ? lastTurn.loose : ''),
+      userFingerprintSource: S.pendingComposerText ? 'composer' : (lastTurn ? 'latest' : ''),
       blocked: false,
       lastError: '',
       lastSeen: '',
@@ -1194,97 +1228,112 @@
     }
   }
 
+  /* 为一段待保存记录找它在页面上的轮次；找不到返回 null。 */
+  /*
+   * 为一段待保存记录认领它在页面上的轮次。
+   * 只用文本指纹，不看"第几轮"：DOM 里只有最近若干轮，绝对序号不可用。
+   * 指纹命中取最后一次出现；没有指纹时只允许"刚入队"的段落用窗口最后一条，
+   * 避免积压的旧任务互相串答案。
+   */
+  function resolveJobTurn(job, turns) {
+    if (!turns.length) return null;
+    const fresh = now() - (Number(job.queuedAt) || 0) <= 90000;
+
+    if (job.userFingerprint) {
+      const exact = turns.filter((item) => item.fingerprint === job.userFingerprint);
+      if (exact.length) return exact[exact.length - 1];
+    }
+    if (job.userLooseFingerprint) {
+      const loose = turns.filter((item) => item.loose === job.userLooseFingerprint);
+      if (loose.length) return loose[loose.length - 1];
+    }
+    // 指纹都对不上但还没超时：刚发出去的那一段几乎一定是窗口里最新的用户消息。
+    // 宁可认领最新一条，也不要因为差一个标点就把整段内容丢掉。
+    if (fresh) return turns[turns.length - 1];
+    return null;
+  }
+  /*
+   * 处理待保存队列。
+   *
+   * 旧实现只拿"队列里第一个还没失败的"那一段：一旦它匹配不上（会话太长被虚拟化，
+   * 原始轮次已经不在 DOM 里），它就会占着位置等满 10 分钟才被标记失败，后面的段落
+   * 全部堵死。实测积压 84 段时落盘彻底停摆，而每 10 分钟才前进一段。
+   *
+   * 现在改成扫描所有候选、挑"此刻真的能保存"的那一段；匹配不上的先跳过并单独计时，
+   * 超时才标记失败。一段卡住不会再拖住其它段。
+   */
   function processSaveQueue() {
     if (!S.settings.saveEnabled) return;
     const currentRoute = queueRouteKey(location.href);
-    let job = S.saveQueue.find((item) =>
+
+    let candidates = S.saveQueue.filter((item) =>
       !item.blocked && (item.routeKey || queueRouteKey(item.url)) === currentRoute);
-    if (!job) {
-      job = S.saveQueue.find((item) => {
+
+    // 当前路由上没有待办时，看看能不能把老路由上的段落迁过来（同一会话换了 URL）
+    if (!candidates.length) {
+      const migratable = S.saveQueue.find((item) => {
         if (item.blocked) return false;
         const itemRoute = item.routeKey || queueRouteKey(item.url);
         return rootToConversationRoute(itemRoute, currentRoute) &&
           now() - (Number(item.queuedAt) || 0) <= SAVE_ROUTE_MIGRATION_MAX_AGE_MS;
       });
-      if (job) {
-        job.routeKey = currentRoute;
-        job.url = location.href;
+      if (migratable) {
+        migratable.routeKey = currentRoute;
+        migratable.url = location.href;
         persistSaveQueue();
       }
+      return;
     }
-    if (!job || job.busy) return;
-    if (job.submittedAt) {
-      if (now() - job.submittedAt < 30000) return;
-      job.submittedAt = 0;
-    }
-    job.busy = true;
-    try {
-      if (now() - job.queuedAt > 120000) {
-        log('warn', '第 ' + job.index + ' 段的回答等待超过 120s，继续等待，不丢弃落盘任务');
+
+    const turns = chatTurns();
+    const generating = !!buttonFor(['停止', 'Stop', 'Stopp']);
+    let dirty = false;
+
+    for (const job of candidates) {
+      if (job.submittedAt) {
+        if (now() - job.submittedAt < 30000) continue;   // 刚提交过，等本地服务回执
+        job.submittedAt = 0;
+        dirty = true;
       }
 
-      const turns = chatTurns();
-      let turn = null;
-      let byOrdinal = null;
-      if (job.userOrdinal > 0) {
-        byOrdinal = turns[job.userOrdinal - 1] || null;
-      }
-      const allMatches = job.userFingerprint
-        ? turns.filter((item) => item.fingerprint === job.userFingerprint)
-        : [];
-      const eligibleMatches = allMatches
-        .filter((item) => item.ordinal >= job.userOrdinal)
-        .sort((a, b) => Math.abs(a.ordinal - job.userOrdinal) - Math.abs(b.ordinal - job.userOrdinal));
-      if (job.userFingerprintSource === 'composer') {
-        // 输入框指纹是本段自己的文本；只接受本段轮次或之后的同一文本。
-        turn = eligibleMatches[0] || null;
-      } else if (job.userFingerprintSource === 'ordinal') {
-        if (byOrdinal && byOrdinal.fingerprint === job.userFingerprint) {
-          turn = byOrdinal;
-        } else if (eligibleMatches.length) {
-          turn = eligibleMatches[0];
-        } else if (byOrdinal && now() - job.queuedAt > 60000) {
-          turn = byOrdinal;
-          log('warn', '第 ' + job.index + ' 段消息文本排版有变化，改按稳定轮次继续保存');
-        }
-      } else if (byOrdinal) {
-        turn = byOrdinal;
-      }
+      const turn = resolveJobTurn(job, turns);
       if (!turn) {
-        if (now() - job.queuedAt > SAVE_ANSWER_TIMEOUT_MS) {
+        if (!job.missedAt) { job.missedAt = now(); dirty = true; }
+        if (now() - job.missedAt > SAVE_TURN_MISS_TIMEOUT_MS) {
           job.blocked = true;
-          job.lastError = '等待对应回答超过 10 分钟，已保留任务，请检查页面后手动重试';
-          persistSaveQueue();
+          job.lastError = '找不到这段对应的用户消息（会话太长，原始轮次已不在页面上）';
+          dirty = true;
           log('error', '第 ' + job.index + ' 段' + job.lastError);
         }
-        if (job.stable !== 0) { job.stable = 0; persistSaveQueue(); }
-        return;
+        continue;
       }
+      if (job.missedAt) { job.missedAt = 0; dirty = true; }
       if (!job.userFingerprint || job.userFingerprint !== turn.fingerprint) {
         job.userFingerprint = turn.fingerprint;
-        persistSaveQueue();
+        dirty = true;
       }
-      const generating = !!buttonFor(['停止', 'Stop', 'Stopp']);
-      const last = turn.answerText;
-      if (generating || !last) {
+
+      const answer = turn.answerText;
+      if (generating || !answer) {
         if (now() - job.queuedAt > SAVE_ANSWER_TIMEOUT_MS) {
           job.blocked = true;
-          job.lastError = '对应回答超过 10 分钟仍未完整出现，已保留任务，请检查页面后手动重试';
-          persistSaveQueue();
+          job.lastError = '对应回答超过 10 分钟仍未完整出现，已保留待处理记录';
+          dirty = true;
           log('error', '第 ' + job.index + ' 段' + job.lastError);
         }
-        if (job.stable !== 0) { job.stable = 0; persistSaveQueue(); }
-        return;
+        continue;
       }
-      if (job.lastSeen !== last) {
-        job.lastSeen = last;
+      if (job.lastSeen !== answer) {
+        job.lastSeen = answer;
         job.stable = 0;
-        persistSaveQueue();
-        return;
+        dirty = true;
+        continue;
       }
       job.stable += 1;
-      persistSaveQueue();
-      if (job.stable < 2) return;           // 连续两次没变，约 3 秒，才算答完
+      dirty = true;
+      if (job.stable < 2) continue;      // 连续两次没变，约 3 秒，才算答完
+
+      if (dirty) persistSaveQueue();
       post('save', {
         saveId: job.saveId,
         course: job.course || '',
@@ -1295,19 +1344,16 @@
         speechSec: job.speechSec,
         url: job.url,
         user: turn.userText,
-        assistant: last
+        assistant: answer
       });
       job.submittedAt = now();
       persistSaveQueue();
       log('info', '第 ' + job.index + ' 段的回答已交给本地归档');
-    } catch (e) {
-      job.stable = 0;
-      log('warn', '落盘采集出错：' + String(e.message || e));
-    } finally {
-      job.busy = false;
+      return;
     }
-  }
 
+    if (dirty) persistSaveQueue();
+  }
   setInterval(() => { try { processSaveQueue(); } catch { /* 忽略 */ } }, 1500);
 
   /* ------------------------- 5. 状态上报 ------------------------- */

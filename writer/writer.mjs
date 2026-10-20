@@ -24,7 +24,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = path.join(HERE, 'config.json');
 const LOG_DIR = path.join(HERE, 'logs');
 const TELEMETRY_FILE = path.join(LOG_DIR, 'telemetry.jsonl');
-const SERVICE_VERSION = '1.2.0';
+const SERVICE_VERSION = '1.2.1';
 const STARTED_AT = new Date().toISOString();
 
 // 工具自身的运行状态（不含任何 ChatGPT 会话内容），用来排查"为什么不发送"
@@ -60,6 +60,8 @@ const DEFAULTS = {
   port: 8799,
   rootDir: '',
   course: '',
+  // 课程目录下的子目录（例如 原始录音）；留空则直接放课程目录下
+  subDir: '',
   courses: [],
   fileNamePattern: '{date} {weekday} {time}',
   includeGerman: true,
@@ -290,7 +292,8 @@ function resolveTarget(cfg, course, when) {
   const rawCourse = safeName(course || cfg.course || '未分类');
   const c = rawCourse === '.' || rawCourse === '..' ? '_' : rawCourse;
   const root = path.resolve(expand(cfg.rootDir));
-  const dir = path.resolve(root, c);
+  const sub = String(cfg.subDir || '').replace(/[\\/:*?"<>|]/g, '').trim();
+  const dir = sub ? path.resolve(root, c, sub) : path.resolve(root, c);
   if (dir !== root && !dir.startsWith(root + path.sep)) throw new Error('分类目录超出落盘根目录');
   mkdirSync(dir, { recursive: true });
   const ctx = {

@@ -618,6 +618,8 @@
   const saveStatus = el('div', 'hint', '');
   const btnRetryBlocked = el('button', 'tiny', '重试失败段落');
   btnRetryBlocked.style.display = 'none';
+  const btnClearBlocked = el('button', 'tiny', '清空失败记录');
+  btnClearBlocked.style.display = 'none';
   const retryCourseSel = document.createElement('select');
   retryCourseSel.style.maxWidth = '160px';
   const retryCourseRow = el('div', 'field');
@@ -679,6 +681,7 @@
     saveStateRow,
     saveStatus,
     btnRetryBlocked,
+    btnClearBlocked,
     retryCourseRow,
     field('归档 GPT 回答', chkSave),
     saveTarget,
@@ -888,6 +891,7 @@
       saveStatus.textContent = lastSaveError;
     }
     btnRetryBlocked.style.display = blockedSaveCount ? '' : 'none';
+  if (btnClearBlocked) btnClearBlocked.style.display = blockedSaveCount ? '' : 'none';
     btnRetryBlocked.disabled = !blockedSaveCount;
     retryCourseRow.style.display = needsRetryCourse ? '' : 'none';
     if (needsRetryCourse) {
@@ -1066,6 +1070,10 @@
   chkAutoTab.onchange = () => { settings.autoOpenTab = chkAutoTab.checked; pushConfig(); };
   chkSave.onchange = () => { settings.saveEnabled = chkSave.checked; settings.savePreferenceSet = true; pushConfig(); if (chkSave.checked) pingWriter(); };
   btnPing.onclick = () => pingWriter();
+  btnClearBlocked.onclick = () => {
+    send('clearBlockedSaves');
+    log_local('info', '已请求清空页面侧失败记录（内容不会丢，只是不再挂在面板上）');
+  };
   btnRetryBlocked.onclick = async () => {
     const blocked = saveOutbox.filter((job) => job.blocked);
     const outboxIds = new Set(saveOutbox.map((job) => job.saveId));

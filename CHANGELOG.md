@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.1 - 2026-10-20
+
+- Fixed long ChatGPT conversations where DOM virtualization removed older turns and blocked every pending archive job.
+- Matched pending segments by exact and punctuation-insensitive transcript fingerprints instead of global message ordinals.
+- Prevented one unmatched segment from blocking unrelated ready segments in the same save queue.
+- Added recovery for recent segments when both fingerprints differ slightly from the rendered user message.
+- Added a panel action to clear permanently unmatchable blocked records after the content has already been archived by another path.
+- Added a development utility to append only newer conversation turns from an exported conversation.
+- Removed the temporary category override mechanism and its expired configuration.
+- Improved development probe output handling for long multilingual text.
+
 ## 1.2.0 - 2026-10-17
 
 - Generalized the project from a classroom/translation utility into a ChatGPT audio dictation and local archive extension.
