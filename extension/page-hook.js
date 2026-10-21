@@ -680,14 +680,28 @@
       recording: dictationActive && !finishing,
       dictationStarting: !btn('transcribeSend') && !!btn('cancelDictate'),
       transcribing: !!btn('cancelTranscribe') || finishing,
-      micIdle: !!btn('dictate'),
+      /*
+       * 麦克风"可以开录" = 「听写」按钮在且没被禁用。
+       * 实测（2026-10-21）：GPT 生成答案期间这个按钮存在但 disabled，点了没反应。
+       * 只判存在会不停空点；只判不存在又会在禁用期干等。两个都要看。
+       */
+      micIdle: !isDisabled(btn('dictate')) && !!btn('dictate'),
       generating: !!buttonFor(['停止', 'Stop', 'Stopp'])
     };
   }
 
+  /** 按钮是不是被页面禁用了（生成答案期间「听写」就是禁的）。 */
+  function isDisabled(b) {
+    return !!b && (!!b.disabled || b.getAttribute('aria-disabled') === 'true');
+  }
+
+  /*
+   * 点按钮。禁用的按钮点了也没反应（实测：GPT 生成答案期间点「听写」完全没用），
+   * 所以这里直接返回 false，让调用方下一轮再试，而不是白等一整轮退避。
+   */
   const click = (label) => {
     const b = btn(label);
-    if (!b) return false;
+    if (!b || isDisabled(b)) return false;
     b.click();
     return true;
   };
@@ -945,8 +959,11 @@
     if (S.jumpedAt && now() - S.jumpedAt < JUMP_COOLDOWN_MS) return;
     // 刚注入提示词、GPT 还在回忆任务要求：等它答完再开录，否则会录进答话干扰
     if (S.injectAt && ui.generating && now() - S.injectAt < INJECT_RECORD_BLOCK_MS) return;
-    // 失败退避：刚发完一段时「听写」按钮往往要过一两秒才回来，
-    // 不退避就会每 100ms 点一次、日志被刷爆（实测刷了几百条）
+    /*
+     * 只剩"真失败"才退避。早先这里不分青红皂白退避 2 秒，等于每段白等 2 秒；
+     * 而按钮被禁用（GPT 还在生成答案）的情况现在由 micIdle / click() 挡住，
+     * 不会空点也不会刷日志，所以这里只保留点击失败后的退避。
+     */
     if (S.nextStartAt && now() < S.nextStartAt) return;
     if (!click('dictate')) return;
     let after = readUi();
@@ -1146,6 +1163,13 @@
     }
     recordSegment(p, sent);
 
+    /*
+     * 这里原本固定等 settleAfterSendMs（默认 400ms）再进入下一轮找「听写」。
+     * 不删掉它：它是"给页面一个喘息"的兜底。真正省时间的是上面两处——
+     * 不再用 2 秒退避去等一个还没回来的按钮，而是每 100ms 看它是不是可点了。
+     * 实测（2026-10-21）：生成结束的同一时刻按钮就可点，之后 0.4s 进入录音，
+     * 空窗不再是固定几秒，而是被压到 GPT 答完的那一刻。
+     */
     S.pending = null;
     setState('idle');
     await sleep(clamp(Number(S.settings.settleAfterSendMs) || 400, 0, 5000));
