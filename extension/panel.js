@@ -30,7 +30,11 @@
     loudCap: 0.45,
     smooth: 0.08,
     settleAfterSendMs: 400,
-    autoStart: true,
+    autoStart: false,
+    autoJumpNewSession: true,
+    autoInjectPrompt: true,
+    newSessionPrompt: '回忆关于会议记录/翻译相关的任务要求，根据要求开始任务。',
+    saveSubDir: '原始录音',
     autoOpenTab: false,
     finishOnStop: true,
     saveEnabled: true,
@@ -539,10 +543,10 @@
 
   // —— 当前分类 + 偏置（偏置叠在工具学到的自动基准上）——
   const courseSel = document.createElement('select');
-  courseSel.style.maxWidth = '132px';
+  courseSel.style.maxWidth = '124px';
   const btnNewCourse = el('button', 'tiny', '新建');
   const courseRow = el('div', 'field');
-  courseRow.append(el('label', '', '当前分类'), courseSel, btnNewCourse);
+  courseRow.append(el('label', '', '③ 当前课程'), courseSel, btnNewCourse);
 
   const newCourseRow = el('div', 'field');
   const newCourseInput = document.createElement('input');
@@ -609,7 +613,10 @@
   // —— 落盘（接力给本地服务）——
   const chkAutoTab = checkbox();
   const chkSave = checkbox();
+  const chkAutoJump = checkbox();
+  const chkAutoInject = checkbox();
   const saveTarget = el('div', 'hint', '');
+  saveTarget.style.wordBreak = 'break-all';
   const btnPing = el('button', 'tiny', '重新检测');
   const saveDot = el('span', 'dot2');
   const saveStateText = el('span', '', '本地落盘服务：未检测');
@@ -629,12 +636,27 @@
   pingRow.append(el('label', '', '服务'), btnPing);
   const btnChooseRoot = el('button', 'tiny', '选择文件夹');
   const rootRow = el('div', 'field');
-  rootRow.append(el('label', '', '落盘根目录'), btnChooseRoot);
+  rootRow.append(el('label', '', '① 落盘根目录'), btnChooseRoot);
+  const subDirInput = document.createElement('input');
+  subDirInput.type = 'text';
+  subDirInput.placeholder = '留空 = 直接放课程目录';
+  subDirInput.style.width = '132px';
+  const subDirRow = el('div', 'field');
+  subDirRow.append(el('label', '', '② 子文件夹'), subDirInput);
   const btnFindRoots = el('button', 'tiny', '发现已有目录');
   const rootCandidates = document.createElement('select');
   rootCandidates.style.maxWidth = '210px';
   const legacyRootRow = el('div', 'field');
   legacyRootRow.append(el('label', '', '已有目录'), rootCandidates, btnFindRoots);
+  // 重装 / 换电脑后找回旧归档用的控件，日常不需要，收进折叠区
+  const advRestore = el('details');
+  advRestore.append(el('summary', '', '高级 / 恢复（找回旧归档目录）'));
+  const advRestoreBody = el('div', 'fields');
+  advRestoreBody.append(
+    el('div', 'hint', '重装扩展或换电脑后，用这里找回之前已归档的目录；日常使用不需要动它。'),
+    legacyRootRow
+  );
+  advRestore.append(advRestoreBody);
   const langSel = document.createElement('select');
   langSel.innerHTML = '<option value="zh-CN">中文</option><option value="de-DE">Deutsch</option><option value="en-US">English</option>';
   const langRow = el('div', 'field');
@@ -646,10 +668,17 @@
   const uiLabel = el('label', '', '界面语言');
   uiRow.append(uiLabel, uiSel);
   const promptBox = el('textarea');
-  promptBox.readOnly = true;
-  promptBox.rows = 7;
+  promptBox.rows = 5;
+  promptBox.placeholder = '留空 = 新会话不自动发任何提示词';
   promptBox.style.cssText = 'width:100%;resize:vertical;padding:7px;border:1px solid #2b3140;border-radius:7px;background:#0e1116;color:#e8ebf0;font:11px/1.45 Consolas,monospace;';
-  const btnCopyPrompt = el('button', 'tiny', '复制 GPT 记忆提示词');
+  const promptHint = el('div', 'hint', '新会话提示词（进入新会话时自动发出，提醒 ChatGPT 回忆你记忆中的任务要求）');
+  promptHint.style.whiteSpace = 'pre-line';
+  const btnCopyPrompt = el('button', 'tiny', '复制提示词');
+  const btnInjectPrompt = el('button', 'tiny', '立即注入');
+  btnInjectPrompt.title = '立刻把这段提示词发到当前会话';
+  const btnResetPrompt = el('button', 'tiny', '恢复默认');
+  const promptRow = el('div', 'row');
+  promptRow.append(btnCopyPrompt, btnInjectPrompt, btnResetPrompt);
   const btnOpenChat = el('button', 'tiny', '打开 GPT 新会话');
   const guideToggle = el('button', 'tiny', '收起首次使用教程');
   const guide = el('div', 'hint', '');
@@ -662,7 +691,7 @@
   const noiseLive = el('div', 'hint', '');
 
   const secPolicy = el('div', 'sec');
-  secPolicy.append(el('h4', '', '当前分类与自动分段'), courseRow, newCourseRow, fAgg);
+  secPolicy.append(el('h4', '', '自动分段与偏置'), fAgg);
 
   const secNoise = el('div', 'sec');
   secNoise.append(
@@ -684,18 +713,30 @@
     btnClearBlocked,
     retryCourseRow,
     field('归档 GPT 回答', chkSave),
-    saveTarget,
+    el('div', 'hint', '落盘位置按 ① → ② → ③ 选一遍就行：'),
     rootRow,
-    legacyRootRow,
+    subDirRow,
+    courseRow,
+    newCourseRow,
+    saveTarget,
     pingRow,
     langRow,
     uiRow,
+    advRestore,
     guideToggle,
     guide,
-    promptBox,
-    el('div', 'row'),
-    btnCopyPrompt,
     btnOpenChat
+  );
+
+  const secAuto = el('div', 'sec');
+  secAuto.append(
+    el('h4', '', '提示词与自动化'),
+    field('自动开始录音', chkAuto),
+    field('上下文满时自动跳转新会话', chkAutoJump),
+    field('新会话自动注入提示词', chkAutoInject),
+    promptHint,
+    promptBox,
+    promptRow
   );
 
   fields.append(
@@ -705,7 +746,6 @@
     field('最短一段（秒）', numMinSeg),
     field('停顿下限（毫秒，0=自动）', numFloor),
     field('发送后等待（毫秒）', numSettle),
-    field('打开页面就自动开始', chkAuto),
     field('打开浏览器就自动开 ChatGPT', chkAutoTab)
   );
   adv.append(sum, fields);
@@ -716,7 +756,7 @@
 
   body.append(
     setupRow, rowActions, meterWrap, grid, why,
-    secPolicy, secNoise, secSave,
+    secPolicy, secNoise, secSave, secAuto,
     adv,
     el('div', 'hint', '分段记录'), segsBox,
     el('div', 'hint', '日志'), logsBox
@@ -976,6 +1016,27 @@
     renderParams();
   }
 
+  /** 示例文件名：本地服务按「{date} {weekday} {time}.md」命名，这里照同一个格式给个样例。 */
+  function exampleFileName(d) {
+    const x = d || new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const wd = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][x.getDay()];
+    return x.getFullYear() + '-' + pad(x.getMonth() + 1) + '-' + pad(x.getDate()) +
+      ' ' + wd + ' ' + pad(x.getHours()) + '-' + pad(x.getMinutes()) + '.md';
+  }
+
+  /** 真实落盘路径 = 根目录 \ 课程 \ 子文件夹（子文件夹留空则直接放课程目录下）。 */
+  function savePathPreview() {
+    if (!writerRoot) return { dir: '', file: '' };
+    const trimSep = (s) => String(s == null ? '' : s).trim().replace(/^[\\/]+/, '').replace(/[\\/]+$/, '');
+    const parts = [String(writerRoot).replace(/[\\/]+$/, '')];
+    parts.push(trimSep(courseStore.active || settings.saveCourse) || '未分类');
+    const sub = trimSep(settings.saveSubDir);
+    if (sub) parts.push(sub);
+    const dir = parts.join('\\');
+    return { dir, file: dir + '\\' + exampleFileName() };
+  }
+
   function renderParams() {
     const t = (status && status.tuning) || null;
     const autoBase = (t && t.autoBase != null) ? Number(t.autoBase) : null;
@@ -1005,8 +1066,13 @@
     numLoudCap.value = String(settings.loudCap);
     numSmooth.value = String(settings.smooth);
     numSettle.value = String(settings.settleAfterSendMs);
+    const paint = (box, on) => { if (box) box.style.background = on ? '#1d4ed8' : '#0e1116'; };
     chkAuto.checked = !!settings.autoStart;
     chkAuto.style.background = settings.autoStart ? '#1d4ed8' : '#0e1116';
+    chkAutoJump.checked = settings.autoJumpNewSession !== false;
+    paint(chkAutoJump, chkAutoJump.checked);
+    chkAutoInject.checked = settings.autoInjectPrompt !== false;
+    paint(chkAutoInject, chkAutoInject.checked);
     chkAutoTab.checked = !!settings.autoOpenTab;
     chkAutoTab.style.background = settings.autoOpenTab ? '#1d4ed8' : '#0e1116';
     chkSave.checked = !!settings.saveEnabled;
@@ -1017,9 +1083,19 @@
     applyUiLanguage();
     guide.style.display = settings.guideOpen === false ? 'none' : '';
     renderCourseSelect();
-    if (saveTarget) saveTarget.textContent = writerRoot
-      ? '实际目录：' + writerRoot + '\\' + (courseStore.active || '未分类')
-      : '尚未选择根目录：点击“选择文件夹”后才会写入文件';
+    if (subDirInput && subDirInput.getRootNode().activeElement !== subDirInput) {
+      subDirInput.value = String(settings.saveSubDir == null ? '' : settings.saveSubDir);
+    }
+    if (saveTarget) {
+      const preview = savePathPreview();
+      saveTarget.textContent = '';
+      if (!preview.dir) {
+        saveTarget.append(el('div', '', '未设置落盘根目录：点击“选择文件夹”后才会写入文件'));
+      } else {
+        saveTarget.append(el('div', '', '实际目录：' + preview.dir));
+        saveTarget.append(el('div', '', '示例文件：' + preview.file));
+      }
+    }
     setupRow.style.display = writerRoot ? 'none' : '';
     setupText.textContent = writerRoot
       ? ''
@@ -1205,6 +1281,7 @@
     }
   };
 
+  // 保留：需要严格的翻译 / 整理规则时，可把这段文案手动粘贴到上面的提示词框里。
   function translationPrompt() {
     const target = settings.language === 'de-DE' ? '德语' : (settings.language === 'en-US' ? '英语' : '中文');
     return '请记住以下音频转录处理规则：\n' +
@@ -1214,8 +1291,14 @@
       '4. 专业术语保留原文注释。当前句子的意思或结论优先，分段清楚。\n' +
       '5. 默认只输出转录、翻译或忠实整理结果；只有在明确要求时才总结、扩写、生成文件或使用写作块。';
   }
-  function refreshPrompt() { if (promptBox) promptBox.value = translationPrompt(); }
-  langSel.onchange = () => { settings.language = langSel.value; saveSettings(); refreshPrompt(); };
+  function refreshPrompt() {
+    if (!promptBox) return;
+    // 用户正在编辑时不要覆盖输入（shadow DOM 里要问 shadow root 的 activeElement）
+    const rootNode = promptBox.getRootNode ? promptBox.getRootNode() : document;
+    if (rootNode && rootNode.activeElement === promptBox) return;
+    promptBox.value = String(settings.newSessionPrompt == null ? '' : settings.newSessionPrompt);
+  }
+  langSel.onchange = () => { settings.language = langSel.value; saveSettings(); };
   function applyUiLanguage() {
     const lang = settings.uiLanguage || 'zh-CN';
     const t = lang === 'de-DE'
@@ -1247,6 +1330,41 @@
     refreshPrompt();
     try { await navigator.clipboard.writeText(promptBox.value); saveStatus.textContent = '提示词已复制；请在新 GPT 会话中粘贴并发送，剪贴板不等于已记住'; }
     catch { promptBox.select(); saveStatus.textContent = '自动复制失败，请手动复制文本框内容'; }
+  };
+  btnInjectPrompt.onclick = () => {
+    const text = String(settings.newSessionPrompt == null ? '' : settings.newSessionPrompt).trim();
+    if (!text) { saveStatus.textContent = '提示词为空，没有可注入的内容'; return; }
+    send('injectPromptNow', {});
+    saveStatus.textContent = '已请求把提示词发到当前会话';
+  };
+  btnResetPrompt.onclick = () => {
+    settings.newSessionPrompt = DEFAULTS.newSessionPrompt;
+    promptBox.value = settings.newSessionPrompt;
+    saveSettings();
+    pushConfig();
+    saveStatus.textContent = '提示词已恢复为默认文案';
+  };
+  promptBox.onchange = () => {
+    settings.newSessionPrompt = promptBox.value;
+    saveSettings();
+    pushConfig();
+  };
+  subDirInput.onchange = () => {
+    settings.saveSubDir = subDirInput.value.trim();
+    saveSettings();
+    pushConfig();
+  };
+  chkAutoJump.onchange = () => {
+    settings.autoJumpNewSession = chkAutoJump.checked;
+    saveSettings();
+    pushConfig();
+    send('autoJump', { enabled: chkAutoJump.checked });
+  };
+  chkAutoInject.onchange = () => {
+    settings.autoInjectPrompt = chkAutoInject.checked;
+    saveSettings();
+    pushConfig();
+    send('autoInject', { enabled: chkAutoInject.checked });
   };
   btnOpenChat.onclick = () => {
     if (ISOLATED) chrome.runtime.sendMessage({ type: 'openChatgptNew' });
@@ -1491,7 +1609,12 @@
         renderParams();
       }
     }
-    else if (d.type === 'ready') { send('config', { ...settings, ...courseExtra() }); send('ping'); }
+    else if (d.type === 'ready') {
+      send('config', { ...settings, ...courseExtra() });
+      send('autoJump', { enabled: settings.autoJumpNewSession !== false });
+      send('autoInject', { enabled: settings.autoInjectPrompt !== false });
+      send('ping');
+    }
   });
 
   if (ISOLATED) {
@@ -1529,6 +1652,8 @@
     settings.saveCourse = courseStore.active || settings.saveCourse || '';
     await saveSettings();
     send('config', { ...settings, ...courseExtra() });
+    send('autoJump', { enabled: settings.autoJumpNewSession !== false });
+    send('autoInject', { enabled: settings.autoInjectPrompt !== false });
     renderParams();
     // 页面探针在 document_start 就注入了，可能比面板早，所以这里主动催几次状态。
     let tries = 0;

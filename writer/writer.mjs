@@ -24,7 +24,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = path.join(HERE, 'config.json');
 const LOG_DIR = path.join(HERE, 'logs');
 const TELEMETRY_FILE = path.join(LOG_DIR, 'telemetry.jsonl');
-const SERVICE_VERSION = '1.2.1';
+const SERVICE_VERSION = '1.3.0';
 const STARTED_AT = new Date().toISOString();
 
 // 工具自身的运行状态（不含任何 ChatGPT 会话内容），用来排查"为什么不发送"
@@ -62,6 +62,9 @@ const DEFAULTS = {
   course: '',
   // 课程目录下的子目录（例如 原始录音）；留空则直接放课程目录下
   subDir: '',
+  // 课程名 → 真实目录名 的映射。面板上的课程名和硬盘上的文件夹名不一致时用它对接，
+  // 有映射就写进映射的目录，没映射才按课程名建目录。
+  courseDirs: {},
   courses: [],
   fileNamePattern: '{date} {weekday} {time}',
   includeGerman: true,
@@ -218,6 +221,17 @@ function loadConfig() {
   cfg.port = Number(cfg.port) || DEFAULTS.port;
   cfg.rootDir = cfg.rootDir ? expand(cfg.rootDir) : '';
   if (!Array.isArray(cfg.courses)) cfg.courses = [];
+  // courseDirs 只接受"字符串 → 非空字符串"的键值对，其它形状一律丢弃，避免脏配置影响落盘
+  const cleanedDirs = {};
+  if (cfg.courseDirs && typeof cfg.courseDirs === 'object' && !Array.isArray(cfg.courseDirs)) {
+    for (const [from, to] of Object.entries(cfg.courseDirs)) {
+      const key = String(from || '').trim();
+      const value = String(to == null ? '' : to).trim();
+      if (key && value) cleanedDirs[key] = value;
+    }
+  }
+  cfg.courseDirs = cleanedDirs;
+  if (typeof cfg.subDir !== 'string') cfg.subDir = DEFAULTS.subDir;
   if (!cfg.fileNamePattern) cfg.fileNamePattern = DEFAULTS.fileNamePattern;
   return cfg;
 }
@@ -287,21 +301,70 @@ function formatName(pattern, ctx) {
   return safeName(out) || ctx.date;
 }
 
+/** 路径类错误：调用方应当按 4xx 拒绝，而不是重试。 */
+function invalidPathError(message) {
+  const e = new Error(message);
+  e.code = 'invalid_path';
+  e.retryable = false;
+  return e;
+}
+
+/**
+ * 把外部传进来的一个目录片段收敛成"单层安全目录名"，不合法就返回空串。
+ * 与 safeName 的区别：这里改用分隔符判定为非法（拒绝），而不是替换成下划线，
+ * 因为子文件夹名是外部输入，宁可明确报错也不要悄悄写到别处。
+ */
+function sanitizeDirSegment(value) {
+  const raw = String(value == null ? '' : value);
+  if (!raw.trim()) return '';
+  if (/[\\/]/.test(raw)) return '';
+  if (/[\x00-\x1f\x7f]/.test(raw)) return '';
+  if (raw.trim() === '.' || raw.trim() === '..') return '';
+  const out = safeName(raw);
+  if (!out || out === '.' || out === '..' || /[\\/]/.test(out)) return '';
+  return out;
+}
+
+/** 课程名 → 目录名：先查 courseDirs 映射，没命中才退回课程名本身。 */
+function resolveCourseDirName(cfg, courseName) {
+  const raw = String(courseName || '');
+  const dirs = cfg.courseDirs && typeof cfg.courseDirs === 'object' ? cfg.courseDirs : {};
+  const mapped = Object.prototype.hasOwnProperty.call(dirs, raw) ? String(dirs[raw] || '').trim() : '';
+  if (mapped) {
+    const clean = sanitizeDirSegment(mapped);
+    if (!clean) {
+      throw invalidPathError('课程目录映射无效（' + raw + ' → ' + mapped + '）：不能包含路径分隔符，也不能是 . 或 ..');
+    }
+    return clean;
+  }
+  const fallback = safeName(raw);
+  if (!fallback || fallback === '.' || fallback === '..') return '_';
+  return fallback;
+}
+
 /** 决定这次写到哪个文件，并确保目录存在。 */
-function resolveTarget(cfg, course, when) {
-  const rawCourse = safeName(course || cfg.course || '未分类');
-  const c = rawCourse === '.' || rawCourse === '..' ? '_' : rawCourse;
+function resolveTarget(cfg, course, when, subDirValue) {
+  const rawCourse = String(course || cfg.course || '未分类');
+  // 目录名走映射；文件头里的显示名仍然是原始课程名
+  const courseDirName = resolveCourseDirName(cfg, rawCourse);
+  const displayName = safeName(rawCourse) || courseDirName;
   const root = path.resolve(expand(cfg.rootDir));
-  const sub = String(cfg.subDir || '').replace(/[\\/:*?"<>|]/g, '').trim();
-  const dir = sub ? path.resolve(root, c, sub) : path.resolve(root, c);
-  if (dir !== root && !dir.startsWith(root + path.sep)) throw new Error('分类目录超出落盘根目录');
+  // subDirValue: undefined = 调用方没传，用 config 的默认值；'' = 明确不要子文件夹
+  const rawSub = subDirValue === undefined ? String(cfg.subDir || '') : String(subDirValue || '');
+  let sub = '';
+  if (rawSub.trim()) {
+    sub = sanitizeDirSegment(rawSub);
+    if (!sub) throw invalidPathError('子文件夹名无效：不能包含路径分隔符，也不能是 . 或 ..');
+  }
+  const dir = sub ? path.resolve(root, courseDirName, sub) : path.resolve(root, courseDirName);
+  if (dir !== root && !dir.startsWith(root + path.sep)) throw invalidPathError('分类目录超出落盘根目录');
   mkdirSync(dir, { recursive: true });
   const ctx = {
     when,
     date: dayString(when),
     time: timeString(when),
     weekday: WEEKDAYS[when.getDay()],
-    course: c
+    course: displayName
   };
   return path.join(dir, formatName(cfg.fileNamePattern, ctx) + '.md');
 }
@@ -432,8 +495,11 @@ const server = http.createServer(async (req, res) => {
         startedAt: STARTED_AT,
         port: config.port,
         rootDir: config.rootDir,
+        rootSelected: Boolean(config.rootDir),
         course: config.course,
         courses: config.courses,
+        courseDirs: config.courseDirs,
+        subDir: config.subDir,
         fileNamePattern: config.fileNamePattern
       });
     }
@@ -466,6 +532,8 @@ const server = http.createServer(async (req, res) => {
         courses: config.courses,
         course: config.course,
         rootDir: config.rootDir,
+        courseDirs: config.courseDirs,
+        subDir: config.subDir,
         fileNamePattern: config.fileNamePattern
       });
     }
@@ -516,11 +584,31 @@ const server = http.createServer(async (req, res) => {
           retryable: false
         });
       }
+      // 子文件夹：body 里带 subDir 就以它为准；没带这个字段才退回 config 的默认值。
+      // 显式传空字符串 = 明确不要子文件夹，直接放课程目录下。
+      let subDirValue;
+      if (Object.prototype.hasOwnProperty.call(p, 'subDir')) {
+        const rawSub = p.subDir == null ? '' : String(p.subDir);
+        if (rawSub.trim()) {
+          const cleanSub = sanitizeDirSegment(rawSub);
+          if (!cleanSub) {
+            return json(res, 400, {
+              ok: false,
+              error: '子文件夹名无效：不能包含路径分隔符，也不能是 . 或 ..',
+              code: 'invalid_subdir',
+              retryable: false
+            });
+          }
+          subDirValue = cleanSub;
+        } else {
+          subDirValue = '';
+        }
+      }
       const rootCheck = checkRootDir(config.rootDir, false);
       if (!rootCheck.ok) return json(res, 409, rootCheck);
       // 文件名取"这节课第一次发送的时刻"，由扩展带过来；没有就用本次写入时刻
       const when = p.sessionStart ? new Date(p.sessionStart) : (p.at ? new Date(p.at) : new Date());
-      const file = resolveTarget(config, course, Number.isFinite(when.getTime()) ? when : new Date());
+      const file = resolveTarget(config, course, Number.isFinite(when.getTime()) ? when : new Date(), subDirValue);
       const saveId = String(p.saveId || '').trim();
       if (saveId && !/^[a-zA-Z0-9._:-]{1,160}$/.test(saveId)) {
         return json(res, 400, { ok: false, error: 'saveId 格式无效', retryable: false });
@@ -625,11 +713,13 @@ const server = http.createServer(async (req, res) => {
     return json(res, 404, { ok: false, error: 'not found' });
   } catch (e) {
     log('请求出错：' + e.message);
-    return json(res, 500, {
+    // 路径类错误是输入问题，明确按 400 拒绝，不告诉扩展"可以重试"
+    const badPath = e && e.code === 'invalid_path';
+    return json(res, badPath ? 400 : 500, {
       ok: false,
       error: String(e.message || e),
       code: e.code || '',
-      retryable: isRetryableFsError(e)
+      retryable: badPath ? false : (e && e.retryable !== undefined ? e.retryable : isRetryableFsError(e))
     });
   }
 });
@@ -647,6 +737,8 @@ server.listen(config.port, '127.0.0.1', () => {
   log(`本地落盘服务已启动（v${SERVICE_VERSION}）`);
   log(`  监听       http://127.0.0.1:${config.port}`);
   log(`  落盘根目录 ${config.rootDir}`);
+  log(`  子文件夹   ${config.subDir || '(不建子文件夹，直接放课程目录)'}`);
+  log(`  课程映射   ${Object.keys(config.courseDirs || {}).length} 条`);
   log(`  文件名模板 ${config.fileNamePattern}`);
   log(`  当前分类   ${config.course || '(未选，落盘时按扩展面板中的分类)'}`);
   log('  保持这个窗口开着即可；关掉它就停止落盘，但不影响扩展正常工作。');

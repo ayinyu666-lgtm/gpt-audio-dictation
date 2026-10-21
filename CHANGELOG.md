@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.0 - 2026-10-21
+
+- Added automatic detection of the ChatGPT context-limit banner and an automatic jump to a new conversation when it appears.
+- Rescued the in-progress segment before switching conversations instead of discarding it silently.
+- Started a fresh archive file and reset segment numbering after following a new conversation, so new content no longer lands in the old file.
+- Frozen archive jobs belonging to the previous conversation instead of letting them spin forever in the queue.
+- Added an editable new-conversation prompt that asks ChatGPT to recall the task requirements from its own memory.
+- Marked injected prompt turns so they are never archived as transcript segments.
+- Added a per-course subdirectory field: empty means files go straight into the course folder.
+- Added a course-to-folder alias map so one course with two names keeps a single folder.
+- Rebuilt the archive destination flow into root directory, subdirectory, and course, with a full path preview.
+- Changed the default so the extension no longer starts recording on its own; press start to begin.
+
 ## 1.2.1 - 2026-10-20
 
 - Fixed long ChatGPT conversations where DOM virtualization removed older turns and blocked every pending archive job.

@@ -27,12 +27,53 @@
     loudCap: 0.45,
     smooth: 0.08,
     settleAfterSendMs: 400,
-    autoStart: true,
+    // 默认停着：扩展自己会起来，但录音要人点。面板比页面脚本晚加载几秒，
+    // 那几秒里必须用"停"这个默认值，否则用户还没说话工具就开始录了。
+    autoStart: false,
+    autoJumpNewSession: true,
+    autoInjectPrompt: true,
+    newSessionPrompt: '回忆关于会议记录/翻译相关的任务要求，根据要求开始任务。',
+    // 落盘子文件夹；空串 = 直接放课程目录（writer 侧按这个语义处理）
+    saveSubDir: '原始录音',
     autoOpenTab: false,
     finishOnStop: true,
     saveEnabled: true,
     savePreferenceSet: false
   };
+
+  // 上下文上限相关的节奏参数（毫秒）
+  const LIMIT_CONFIRM_GAP_MS = 3000;      // 两次疑似命中之间至少隔这么久才算"连续"
+  const LIMIT_SUSPECT_TTL_MS = 15000;     // 单次疑似过这么久没二次命中就忘掉
+  const JUMP_COOLDOWN_MS = 45000;         // 跳到新会话后先别急着开录
+  const INJECT_COOLDOWN_MS = 60000;       // 两次注入至少隔这么久
+  const INJECT_SETTLE_MS = 2500;          // 判定进入新会话后等页面稳定再注入
+  const INJECT_RECORD_BLOCK_MS = 45000;   // 注入后这段时间内、GPT 还在输出时不开新录
+
+  /*
+   * 上下文已满的判据：中英双语都要覆盖，用户界面可能切换语言。
+   *
+   * 这里只放"这个会话装不下了"的说法。**绝不能**出现「新聊天 / New chat」——
+   * 侧边栏左上角那个常驻按钮的文本就是它，body.innerText 里永远存在，
+   * 放进这条正则会导致每轮都命中、开课几秒就把整节课跳走。
+   */
+  const CONTEXT_LIMIT_RE = new RegExp(
+    '达到上限|已达上限|上限已满|上下文已满|上下文已达|上下文超|上下文长度|' +
+    '对话太[长多]|对话过长|此对话已达|此对话已?超|已达.{0,4}上限|已达到.{0,6}限制|' +
+    '请开启?新对话|请开始新对话|需要新对话|换[一]?个新对话|' +
+    'reached the (?:limit|maximum)|hit the (?:limit|context)|context (?:length|limit|window)|' +
+    'maximum context|too long to continue|conversation (?:is )?too long|' +
+    'start a new (?:chat|conversation) to continue|' +
+    'message limit|length limit|out of context',
+    'i'
+  );
+
+  /*
+   * 「新聊天」这类说法只在横幅节点里才算数，用来兜住没写"上限"两个字的横幅。
+   * 正文扫描绝不使用这条正则。
+   */
+  const NEW_CHAT_HINT_RE = new RegExp(
+    '开启?新对话|开始新对话|新的对话|新建聊天|新聊天|new chat|new conversation', 'i'
+  );
 
   const PRESETS = {
     normal: {},
@@ -82,6 +123,15 @@
     pendingComposerText: '',
     saveQueue: [],
     lastQueuedUserOrdinalByRoute: Object.create(null),
+    // 新会话跟随 / 上下文上限 / 提示词注入
+    limitSuspectAt: 0,      // 第一次疑似"上下文已满"的时刻
+    limitSuspectCount: 0,   // 连续疑似次数
+    jumpedAt: 0,            // 上一次自动跳到新会话的时刻
+    injectAt: 0,            // 上一次注入提示词的时刻
+    injectedText: '',       // 上一次注入的文本，用来把这条消息从落盘认领里排除
+    lastConversationId: '', // 上一次看到的会话 id，用来判断"是不是换了会话"
+    limitHitLoggedFor: '',  // 已经打过日志的命中片段，避免每轮刷屏
+    limitWarnedAt: 0,       // 自动跳转关闭时，手动提醒的节流时刻
   };
   window.__gadMain = S;
 
@@ -103,6 +153,20 @@
       return String(value || location.href);
     }
   };
+  /**
+   * 取 URL 里的会话 id（/c/<id>）。取不到返回空串。
+   * 换会话的判断必须靠它：只看 href 全串的话，同一会话里改了个 query 也会被当成换会话。
+   */
+  function conversationIdFromHref(href) {
+    try {
+      const u = new URL(String(href || ''), location.href);
+      const m = /^\/c\/([^/?#]+)/.exec(u.pathname);
+      return m ? m[1] : '';
+    } catch {
+      return '';
+    }
+  }
+
   function rootToConversationRoute(fromRoute, toRoute) {
     try {
       const from = new URL(fromRoute);
@@ -375,6 +439,20 @@
         }
         break;
       }
+      case 'autoJump':
+        // 面板勾选框变化时只送这一个开关，不整体覆盖设置
+        S.settings.autoJumpNewSession = !!(d.payload && d.payload.enabled);
+        post('settings', S.settings);
+        break;
+      case 'autoInject':
+        S.settings.autoInjectPrompt = !!(d.payload && d.payload.enabled);
+        post('settings', S.settings);
+        break;
+      case 'injectPromptNow':
+        // 面板上的"立即注入"按钮：不管开关状态，执行一次
+        injectPrompt();
+        api.pushStatus();
+        break;
       case 'assignBlockedCourse': {
         const course = String(d.payload && d.payload.course || '').trim();
         if (!course) break;
@@ -754,6 +832,8 @@
     try {
       if (!S.analyser) installMicHook();
 
+      maybeHandleContextLimit();
+
       const ui = readUi();
       if (!ui.hasComposer) {
         if (S.running) setState('waiting', '输入框还没出现（可能没登录）');
@@ -813,6 +893,10 @@
       return;
     }
     if (!ui.micIdle) return;
+    // 刚跳到新会话：页面和提示词流程都还没走完，这时候开录只会录到空段
+    if (S.jumpedAt && now() - S.jumpedAt < JUMP_COOLDOWN_MS) return;
+    // 刚注入提示词、GPT 还在回忆任务要求：等它答完再开录，否则会录进答话干扰
+    if (S.injectAt && ui.generating && now() - S.injectAt < INJECT_RECORD_BLOCK_MS) return;
     // 失败退避：刚发完一段时「听写」按钮往往要过一两秒才回来，
     // 不退避就会每 100ms 点一次、日志被刷爆（实测刷了几百条）
     if (S.nextStartAt && now() < S.nextStartAt) return;
@@ -1128,18 +1212,30 @@
   function chatTurns() {
     const users = outerMatches(USER_MESSAGE_SELECTOR);
     const answers = outerMatches(ANSWER_TEXT_SELECTOR);
+    // 我们注入的任务提示词也是一条用户消息，绝不能让它被当成一段转录落盘
+    const injectedFp = S.injectedText ? textFingerprint(S.injectedText) : '';
+    const injectedLoose = S.injectedText ? looseFingerprint(S.injectedText) : '';
+    const promptText = String(S.settings.newSessionPrompt || '');
+    const promptFp = promptText ? textFingerprint(promptText) : '';
+    const promptLoose = promptText ? looseFingerprint(promptText) : '';
     return users.map((node, index) => {
       const nextUser = users[index + 1] || null;
       const answerNodes = answers.filter((answer) =>
         follows(answer, node) && (!nextUser || follows(nextUser, answer)));
       const userText = cleanNodeText(node);
       const answerText = answerNodes.map(cleanNodeText).filter(Boolean).join('\n\n');
+      const fp = textFingerprint(userText);
+      const loose = looseFingerprint(userText);
+      const isInjected =
+        (injectedFp && fp === injectedFp) || (injectedLoose && loose === injectedLoose) ||
+        (promptFp && fp === promptFp) || (promptLoose && loose === promptLoose);
       return {
         ordinal: index + 1,
         userText,
         answerText,
-        fingerprint: textFingerprint(userText),
-        loose: looseFingerprint(userText)
+        fingerprint: fp,
+        loose,
+        isInjected: !!isInjected
       };
     });
   }
@@ -1237,7 +1333,15 @@
    */
   function resolveJobTurn(job, turns) {
     if (!turns.length) return null;
-    const fresh = now() - (Number(job.queuedAt) || 0) <= 90000;
+    // 第一道闸：注入的提示词那一轮永远不参与认领（无论后面怎么匹配）
+    const usable = turns.filter((item) => !item.isInjected);
+    if (!usable.length) return null;
+    turns = usable;
+
+    let fresh = now() - (Number(job.queuedAt) || 0) <= 90000;
+    // 第二道闸：刚注入过提示词的这一分钟内，不许用"窗口最后一条"兜底，
+    // 否则 GPT 对提示词的回话会被当成某段转录的答案。
+    if (S.injectAt && now() - S.injectAt < INJECT_COOLDOWN_MS) fresh = false;
 
     if (job.userFingerprint) {
       const exact = turns.filter((item) => item.fingerprint === job.userFingerprint);
@@ -1344,7 +1448,9 @@
         speechSec: job.speechSec,
         url: job.url,
         user: turn.userText,
-        assistant: answer
+        assistant: answer,
+        // 空串有意义：writer 收到 '' 就把文件直接放课程目录，不要替换成默认值
+        subDir: String(S.settings.saveSubDir == null ? '' : S.settings.saveSubDir)
       });
       job.submittedAt = now();
       persistSaveQueue();
@@ -1419,28 +1525,259 @@
 
   setInterval(() => { if (S.running) postStatus(); }, 250);
 
+  /* ------------------- 6. 上下文上限检测与自动跳新会话 ------------------- */
+
+  /*
+   * 上下文满了以后 ChatGPT 会在页面上挂一条横幅，但横幅的文案随版本变。
+   * 分两段扫，规则不同：
+   *   - 正文：只用 CONTEXT_LIMIT_RE。侧边栏常驻的「新聊天」按钮也在 body 里，
+   *     所以正文不能用 NEW_CHAT_HINT_RE，否则每轮都命中、开课几秒就被跳走。
+   *   - 横幅节点：CONTEXT_LIMIT_RE || NEW_CHAT_HINT_RE，兜住没写"上限"两个字的横幅。
+   * 只取正文前 6000 字符：横幅在页面上部，取全页既慢又会把旧回答里的
+   * "对话太长"之类字眼算进来。
+   */
+  function scanLimitText() {
+    let hits = 0;
+    try {
+      let body = String(document.body ? document.body.innerText || '' : '').slice(0, 6000);
+      // 双保险：把侧边栏整块从正文里剔掉再扫，就算以后按钮文案改成"已达上限"也不误判
+      const rails = document.querySelectorAll(
+        'nav, aside, [data-testid*="sidebar"], [aria-label*="侧边栏"], [aria-label*="Sidebar"]'
+      );
+      for (const node of rails) {
+        const rail = String(node.innerText || node.textContent || '');
+        if (rail) body = body.split(rail).join('');
+      }
+      const m = CONTEXT_LIMIT_RE.exec(body);
+      if (m) {
+        hits += 1;
+        // 只在"还没确认"的阶段打一次（首次疑似）：真出误判时能从遥测里直接看到命中了哪句话
+        if (S.limitSuspectCount <= 1) {
+          const snippet = body.slice(Math.max(0, m.index - 30), m.index + 60).replace(/\s+/g, ' ');
+          if (S.limitHitLoggedFor !== snippet) {
+            S.limitHitLoggedFor = snippet;
+            log('info', '上下文上限疑似命中：…' + snippet + '…');
+          }
+        }
+      }
+    } catch { /* 忽略 */ }
+    try {
+      const banners = document.querySelectorAll('[role="alert"], [aria-live], [data-testid*="banner"]');
+      for (const node of banners) {
+        const text = String(node.innerText || node.textContent || '');
+        if (text && (CONTEXT_LIMIT_RE.test(text) || NEW_CHAT_HINT_RE.test(text))) hits += 1;
+      }
+    } catch { /* 忽略 */ }
+    return hits;
+  }
+
+  /**
+   * 判定"上下文已满"。必须连续两次命中（间隔 ≥3s）才算，
+   * 一次误判就把整节课跳走是不可接受的；单次疑似 15 秒后自动忘掉。
+   */
+  function detectContextLimit() {
+    if (S.limitSuspectAt && now() - S.limitSuspectAt > LIMIT_SUSPECT_TTL_MS) {
+      S.limitSuspectAt = 0;
+      S.limitSuspectCount = 0;
+    }
+    if (!scanLimitText()) return false;
+    if (!S.limitSuspectAt || now() - S.limitSuspectAt >= LIMIT_CONFIRM_GAP_MS) {
+      if (S.limitSuspectCount >= 1 && S.limitSuspectAt && now() - S.limitSuspectAt >= LIMIT_CONFIRM_GAP_MS) {
+        // 第二次命中：确认
+        S.limitSuspectCount = 2;
+        S.limitSuspectAt = now();
+        return true;
+      }
+      S.limitSuspectAt = now();
+      S.limitSuspectCount = 1;
+      log('info', '疑似出现上下文上限提示，等待二次确认');
+      return false;
+    }
+    return false;
+  }
+
+  /** 把不属于当前会话的落盘任务冻住，别让它们每 1.5 秒空转还永不超时。 */
+  function freezeForeignQueueJobs(currentRouteKey) {
+    let changed = 0;
+    for (const job of S.saveQueue) {
+      const jobRoute = job.routeKey || queueRouteKey(job.url);
+      if (jobRoute === currentRouteKey) continue;
+      if (job.blocked) continue;
+      job.blocked = true;
+      job.busy = false;
+      job.submittedAt = 0;
+      job.lastError = '会话已切换，原轮次已不在当前页面';
+      changed += 1;
+    }
+    if (!changed) return 0;
+    persistSaveQueue();
+    postSaveQueueState(true);
+    log('warn', changed + ' 段属于旧会话，已标记为待处理（面板可一键清空）');
+    return changed;
+  }
+
+  /** 切走之前把还没发出去的这段抢救一下：点「转录并发送」，让它跟着旧会话发出去。 */
+  function rescuePendingSegment() {
+    const p = S.pending;
+    if (!p) return true;
+    const dispatched = click('transcribeSend') || click('send');
+    if (dispatched) {
+      log('warn', '会话即将切换，已补发未发送的段落，本段不再计入新会话');
+      return true;
+    }
+    log('warn', '会话切换时第 ' + p.seg.index + ' 段还没发出去，且找不到发送按钮——这段内容丢了');
+    return false;
+  }
+
+  /** 优先点侧边栏的「新聊天」，点不到才退回落地点首页；域名一律动态取。 */
+  function openNewChat() {
+    try {
+      const candidates = Array.from(document.querySelectorAll('a[href="/"], a[href="' + location.origin + '/"]'));
+      for (const node of candidates) {
+        if (node && typeof node.click === 'function') { node.click(); return true; }
+      }
+      const byLabel = Array.from(document.querySelectorAll('a, button'));
+      for (const node of byLabel) {
+        const label = String(node.getAttribute('aria-label') || node.innerText || node.textContent || '');
+        if (/新聊天|新的聊天|New chat/i.test(label)) {
+          node.click();
+          return true;
+        }
+      }
+    } catch { /* 落到下面的硬跳转 */ }
+    try {
+      location.href = location.origin + '/';
+      return true;
+    } catch { /* 忽略 */ }
+    return false;
+  }
+
+  /*
+   * 把提示词写进输入框并发送。这段文本之后会被 chatTurns() 标成 isInjected，
+   * 不会被落盘认领成转录段。
+   */
+  async function injectPrompt() {
+    const text = String(S.settings.newSessionPrompt || '').trim();
+    if (!text) {
+      log('warn', '提示词为空，跳过注入');
+      return false;
+    }
+    const composer = document.querySelector(COMPOSER_SELECTOR)
+      || document.querySelector('[contenteditable="true"]');
+    if (!composer) {
+      log('warn', '找不到输入框，提示词没注入');
+      return false;
+    }
+    let written = false;
+    try {
+      composer.focus();
+      // execCommand 是这条路径上唯一能让 ProseMirror 认账的写入方式
+      written = document.execCommand('insertText', false, text);
+    } catch { written = false; }
+    const has = String(composer.innerText || composer.textContent || '').includes(text);
+    if (!written || !has) {
+      // 退路：直接写内容再补一个 input 事件，让 React/ProseMirror 同步状态
+      try {
+        composer.textContent = text;
+        composer.dispatchEvent(new InputEvent('input', { bubbles: true, data: text }));
+      } catch { /* 忽略 */ }
+    }
+    S.injectAt = now();
+    S.injectedText = text;
+    await sleep(400);
+    const sent = click('send');
+    log('ok', '已在新会话注入提示词，请等待 ChatGPT 回忆任务要求' + (sent ? '' : '（发送按钮未找到，请手动发送）'));
+    return true;
+  }
+
+  /** 检测到上下文满之后的整套动作：抢救未发送段 → 跳新会话 → 记冷却。 */
+  function jumpToNewSession() {
+    if (S.pending) rescuePendingSegment();
+    log('warn', '检测到上下文已满，自动跳转新会话');
+    const ok = openNewChat();
+    if (!ok) log('error', '跳转新会话失败：既没有「新聊天」入口，也无法改写地址');
+    S.jumpedAt = now();
+    S.limitSuspectAt = 0;
+    S.limitSuspectCount = 0;
+    S.pending = null;
+    S.segment = null;
+    if (S.running) setState('idle');
+  }
+
+  // 主循环里每轮问一次：满了就跳，跳完有 45 秒冷却，不会连跳
+  function maybeHandleContextLimit() {
+    if (!S.running || S.state === 'off') return;
+    if (S.jumpedAt && now() - S.jumpedAt < JUMP_COOLDOWN_MS) return;
+    if (!detectContextLimit()) return;
+    // 开关关掉时也照样检测：只提醒，不跳转，别让整节课悄悄卡死
+    if (S.settings.autoJumpNewSession === false) {
+      if (now() - (S.limitWarnedAt || 0) > 60000) {
+        S.limitWarnedAt = now();
+        log('warn', '上下文似乎已满，自动跳转已关闭，请手动开一个新会话');
+      }
+      return;
+    }
+    jumpToNewSession();
+  }
+
   // 页面路由变化（切会话）时重置并上报
   let lastHref = location.href;
+  S.lastConversationId = conversationIdFromHref(lastHref);
   setInterval(() => {
     if (location.href !== lastHref) {
       const previousHref = lastHref;
       lastHref = location.href;
-      const firstChatTransition = rootToConversationRoute(
-        queueRouteKey(previousHref),
-        queueRouteKey(lastHref)
-      );
-      migrateRootQueueJobs(previousHref, lastHref);
-      if (S.running && S.state !== 'off') {
-        if (firstChatTransition) {
-          // 新会话从 / 跳到 /c/... 是正常发送结果，不能把正在 finalizing 的段清掉。
-          log('info', '新会话已建立，保留当前录音/转录状态');
-        } else {
-          log('warn', '页面切换了会话，重新开始');
-          S.segment = null;
-          S.pending = null;
-          setState('idle');
-        }
+      const previousRoute = queueRouteKey(previousHref);
+      const currentRoute = queueRouteKey(lastHref);
+      const previousId = S.lastConversationId;
+      const currentId = conversationIdFromHref(lastHref);
+      S.lastConversationId = currentId;
+
+      const firstChatTransition = rootToConversationRoute(previousRoute, currentRoute);
+      // 会话 → 会话：这是"换了一个会话"，不是发送结果
+      const conversationChanged = !!previousId && !!currentId && previousId !== currentId;
+
+      if (firstChatTransition) {
+        // / → /c/... 是正常发送结果，把老路由上的任务迁过来，别让它们卡住
+        migrateRootQueueJobs(previousHref, lastHref);
       }
+
+      if (conversationChanged) {
+        // 旧会话的轮次再也匹配不上了：冻住它们，别每 1.5 秒空转扫描
+        freezeForeignQueueJobs(currentRoute);
+        // 切走之前先抢救没发出去的段；救不下来就明确告警，不静默丢弃
+        if (S.running && S.state !== 'off') {
+          rescuePendingSegment();
+          // 新会话 = 新文件：从头编号，否则内容会继续写进旧文件名
+          S.sessionStart = now();
+          S.segmentIndex = 0;
+          S.pending = null;
+          S.segment = null;
+          if (S.state !== 'off') setState('idle');
+          log('info', '已跟随新会话，落盘改用新文件');
+        } else {
+          S.pending = null;
+          S.segment = null;
+        }
+      } else if (!firstChatTransition && S.running && S.state !== 'off') {
+        log('warn', '页面切换了会话，重新开始');
+        S.segment = null;
+        S.pending = null;
+        setState('idle');
+      }
+
+      // 进入新会话（首跳 / → /c/... 也算）后自动注入任务提示词
+      const enteredNewConversation =
+        (conversationChanged && !!currentId) || (firstChatTransition && !!currentId);
+      if (enteredNewConversation && S.running &&
+          S.settings.autoInjectPrompt !== false &&
+          now() - (S.injectAt || 0) > INJECT_COOLDOWN_MS) {
+        setTimeout(() => {
+          if (!S.running) return;
+          injectPrompt().catch(() => {});
+        }, INJECT_SETTLE_MS);
+      }
+
       postStatus();
     }
   }, 600);
