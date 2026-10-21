@@ -1,7 +1,7 @@
 /*
  * 导出指定 ChatGPT 会话的完整内容（在已登录页面里 fetch，需要 live 登录态）。
  * 用法：
- *   node tools/dev/export-conversations.mjs --port 9224 --ids 6ad8d3a0-xxx,6ad8dcb3-xxx --out exports/2026-10-21.json
+ *   node tools/dev/export-conversations.mjs --port 9224 --ids <id1>,<id2> --out exports/conversations.json
  * 只做只读抓取 + 落盘，不改页面、不发送消息。
  */
 import { mkdirSync, writeFileSync } from 'node:fs';

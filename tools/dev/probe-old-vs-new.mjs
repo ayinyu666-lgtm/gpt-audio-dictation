@@ -1,6 +1,7 @@
 /*
- * v7：对比老会话与新会话的听写按钮链，确认是不是「新会话走新 UI、老会话走旧 UI」的灰度。
- * 老会话用 URL 直接导航；新会话导航到根。
+ * v8：对比老会话与新会话的听写按钮链。
+ * 用法：node tools/dev/probe-old-vs-new.mjs [--port 9224] [--url https://chatgpt.com/c/<id>]
+ * 不给 --url 时只用当前页面对比「新会话」与「当前会话」。
  */
 import { CDP } from './cdp.mjs';
 
@@ -8,7 +9,7 @@ const args = process.argv.slice(2);
 const i = args.indexOf('--port');
 const port = i >= 0 ? args[i + 1] : '9224';
 const j = args.indexOf('--url');
-const oldUrl = j >= 0 ? args[j + 1] : 'https://chatgpt.com/c/6ad8b657-2594-83ed-86db-a0232e8528fa';
+const oldUrl = j >= 0 ? args[j + 1] : '';
 
 const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
 const page = list.find((t) => t.type === 'page' && (t.url || '').includes('chatgpt.com'));
@@ -45,11 +46,10 @@ async function run(tag, url) {
   await wait(3000);
   const rec = await ev(SNAP);
   console.log('  录音按钮: [' + rec.btns.join(' | ') + ']  pmLen=' + rec.pmLen);
-  console.log('  有「转录并发送」? ' + JSON.stringify(await ev(`!!document.querySelector('button[aria-label="转录并发送"]')`)));
-  console.log('  有「发送」? ' + JSON.stringify(await ev(`!!document.querySelector('button[aria-label="发送"]')`)));
-  console.log('  有「停止听写」? ' + JSON.stringify(await ev(`!!document.querySelector('button[aria-label="停止听写"]')`)));
-  console.log('  有「取消听写」? ' + JSON.stringify(await ev(`!!document.querySelector('button[aria-label="取消听写"]')`)));
-  // 收口
+  for (const label of ['转录并发送', '发送', '停止听写', '取消听写']) {
+    const has = await ev(`!!document.querySelector('button[aria-label="${label}"]')`);
+    console.log('  有「' + label + '」? ' + has);
+  }
   const fin = await ev(`(() => {
     for (const l of ['转录并发送','发送','停止听写','取消听写']) {
       const b = document.querySelector('button[aria-label="'+l+'"]');
@@ -63,6 +63,6 @@ async function run(tag, url) {
 }
 
 await run('新会话', 'https://chatgpt.com/');
-await run('老会话(6ad8b657 Weichere Materialien)', oldUrl);
-await run('老会话(6ad855a5 回忆翻译要求)', 'https://chatgpt.com/c/6ad855a5-2f0c-83ed-84d0-320572c8811c');
+if (oldUrl) await run('指定会话', oldUrl);
+else await run('当前页面会话', page.url);
 process.exit(0);
