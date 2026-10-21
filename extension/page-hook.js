@@ -30,6 +30,9 @@
     // 默认停着：扩展自己会起来，但录音要人点。面板比页面脚本晚加载几秒，
     // 那几秒里必须用"停"这个默认值，否则用户还没说话工具就开始录了。
     autoStart: false,
+    // 只有用户在面板上亲手拨过开关，才记为 true。旧版默认是开，
+    // 老用户存档里的 autoStart:true 不算数，见 panel.js 的加载逻辑。
+    autoStartPreferenceSet: false,
     autoJumpNewSession: true,
     autoInjectPrompt: true,
     newSessionPrompt: '回忆关于会议记录/翻译相关的任务要求，根据要求开始任务。',
@@ -46,8 +49,11 @@
   const LIMIT_SUSPECT_TTL_MS = 15000;     // 单次疑似过这么久没二次命中就忘掉
   const JUMP_COOLDOWN_MS = 45000;         // 跳到新会话后先别急着开录
   const INJECT_COOLDOWN_MS = 60000;       // 两次注入至少隔这么久
-  const INJECT_SETTLE_MS = 2500;          // 判定进入新会话后等页面稳定再注入
+  const INJECT_SETTLE_MS = 600;           // 判定进入新会话后等页面稳定再注入（原来 2.5 秒太慢，注入还没发出去就先开录了）
   const INJECT_RECORD_BLOCK_MS = 45000;   // 注入后这段时间内、GPT 还在输出时不开新录
+  const INJECT_POST_WAIT_MS = 1200;       // 注入发出去之后再压一小会儿，等 GPT 真正开始回答
+  const INJECT_COMPOSER_WAIT_MS = 8000;   // 等输入框就绪的上限
+  const INJECT_SEND_WAIT_MS = 6000;       // 等「发送」按钮出现并点中的上限
 
   /*
    * 点了「发送」之后，输入框多久才清空。
@@ -136,6 +142,8 @@
     limitSuspectCount: 0,   // 连续疑似次数
     jumpedAt: 0,            // 上一次自动跳到新会话的时刻
     injectAt: 0,            // 上一次注入提示词的时刻
+    injectPendingAt: 0,     // 已排定注入、还没真正发出的时刻（非 0 时禁止开录）
+    injecting: false,       // 正在注入（并发门）
     injectedText: '',       // 上一次注入的文本，用来把这条消息从落盘认领里排除
     lastConversationId: '', // 上一次看到的会话 id，用来判断"是不是换了会话"
     limitHitLoggedFor: '',  // 已经打过日志的命中片段，避免每轮刷屏
@@ -871,6 +879,12 @@
       log('info', '▶ 自动听写已开启' + (reason ? '（' + reason + '）' : ''));
       setState('waiting');
       post('running', { running: true });
+      /*
+       * 刚打开页面就停在空白新会话（地址还是 /）时，没有任何"进入新会话"的跳转
+       * 可供触发，提示词就会永远不发。这里补一个入口：开始跑的时候如果人就在
+       * 空白新会话上，先把提示词发出去，再开录。
+       */
+      if (!conversationIdFromHref(location.href)) queuePromptInjection('空白新会话');
     },
     stop() {
       if (!S.running) return;
@@ -957,6 +971,13 @@
     if (!ui.micIdle) return;
     // 刚跳到新会话：页面和提示词流程都还没走完，这时候开录只会录到空段
     if (S.jumpedAt && now() - S.jumpedAt < JUMP_COOLDOWN_MS) return;
+    /*
+     * 提示词还没落地就开录，是「新会话第一句没发出去」的另一半原因：
+     * 录到的第一段会把提示词文本一起吞进输入框，最后当成转录发出去。
+     * 排定注入（injectPendingAt）到注入真正结束（injecting）之间一律不开录。
+     */
+    if (S.injectPendingAt || S.injecting) return;
+    if (S.injectAt && now() - S.injectAt < INJECT_POST_WAIT_MS) return;
     // 刚注入提示词、GPT 还在回忆任务要求：等它答完再开录，否则会录进答话干扰
     if (S.injectAt && ui.generating && now() - S.injectAt < INJECT_RECORD_BLOCK_MS) return;
     /*
@@ -1745,38 +1766,118 @@
    * 把提示词写进输入框并发送。这段文本之后会被 chatTurns() 标成 isInjected，
    * 不会被落盘认领成转录段。
    */
+  /**
+   * 排定一次提示词注入。
+   *
+   * 冷却门必须在这里就占位：早先只判 injectAt，而 injectAt 要等 2.5 秒后
+   * 真正执行时才写，这个空档里 URL 轮询又转两圈，各排一个定时器，双双通过
+   * 冷却门 —— 同一句提示词就被写两遍、发两遍（用户实测到「…任务要求。…任务要求。」）。
+   */
+  function queuePromptInjection(reason) {
+    if (!S.running || S.state === 'off') return false;
+    if (S.settings.autoInjectPrompt === false) return false;
+    if (S.injecting || S.injectPendingAt) return false;
+    if (now() - (S.injectAt || 0) < INJECT_COOLDOWN_MS) return false;
+    S.injectPendingAt = now();
+    // 先把主循环压住，别让它在提示词发出去之前就点开录音（"第一轮没提醒"的另一半原因）
+    if (S.state === 'idle' || S.state === 'waiting') setState('idle');
+    log('info', '准备注入提示词（' + reason + '）');
+    setTimeout(() => {
+      S.injectPendingAt = 0;
+      if (!S.running) return;
+      injectPrompt().catch(() => {});
+    }, INJECT_SETTLE_MS);
+    return true;
+  }
+
   async function injectPrompt() {
     const text = String(S.settings.newSessionPrompt || '').trim();
     if (!text) {
       log('warn', '提示词为空，跳过注入');
       return false;
     }
-    const composer = document.querySelector(COMPOSER_SELECTOR)
-      || document.querySelector('[contenteditable="true"]');
-    if (!composer) {
-      log('warn', '找不到输入框，提示词没注入');
-      return false;
-    }
-    let written = false;
-    try {
-      composer.focus();
-      // execCommand 是这条路径上唯一能让 ProseMirror 认账的写入方式
-      written = document.execCommand('insertText', false, text);
-    } catch { written = false; }
-    const has = String(composer.innerText || composer.textContent || '').includes(text);
-    if (!written || !has) {
-      // 退路：直接写内容再补一个 input 事件，让 React/ProseMirror 同步状态
-      try {
-        composer.textContent = text;
-        composer.dispatchEvent(new InputEvent('input', { bubbles: true, data: text }));
-      } catch { /* 忽略 */ }
-    }
+    /*
+     * 先占住位置再动手：冷却门和并发门都看 injectAt / injecting，
+     * 早先是等真正写完才写 injectAt，2.5 秒的排期窗口里能被排两次，
+     * 结果同一句话写两遍发两遍（用户实测到「…任务要求。…任务要求。」）。
+     */
+    if (S.injecting) return false;
+    S.injecting = true;
     S.injectAt = now();
     S.injectedText = text;
-    await sleep(400);
-    const sent = click('send');
-    log('ok', '已在新会话注入提示词，请等待 ChatGPT 回忆任务要求' + (sent ? '' : '（发送按钮未找到，请手动发送）'));
-    return true;
+    try {
+      const composer = await waitForComposer(INJECT_COMPOSER_WAIT_MS);
+      if (!composer) {
+        log('warn', '找不到输入框，提示词没注入');
+        return false;
+      }
+      // 输入框里还有别的文字（上一段没发干净的转录），先清掉，否则会跟提示词粘在一起
+      const before = String(composer.innerText || composer.textContent || '').trim();
+      if (before) {
+        composer.focus();
+        try { document.execCommand('selectAll', false, null); document.execCommand('delete', false, null); } catch { /* 忽略 */ }
+        if (String(composer.innerText || composer.textContent || '').trim()) {
+          composer.textContent = '';
+          composer.dispatchEvent(new InputEvent('input', { bubbles: true }));
+        }
+        await sleep(120);
+      }
+      let written = false;
+      try {
+        composer.focus();
+        // execCommand 是这条路径上唯一能让 ProseMirror 认账的写入方式
+        written = document.execCommand('insertText', false, text);
+      } catch { written = false; }
+      const has = String(composer.innerText || composer.textContent || '').includes(text);
+      if (!written || !has) {
+        // 退路：直接写内容再补一个 input 事件，让 React/ProseMirror 同步状态
+        try {
+          composer.textContent = text;
+          composer.dispatchEvent(new InputEvent('input', { bubbles: true, data: text }));
+        } catch { /* 忽略 */ }
+      }
+      /*
+       * 发送按钮不是写完就立刻在的：实测要等页面把输入框状态同步过去（几十到几百毫秒）。
+       * 早先固定 sleep(400) 再点一次，点空就放弃，于是提示词永远留在输入框里，
+       * 等下一段录音的补发把它连同转录一起送出去——这就是"第二轮才发"的由来。
+       */
+      const sendDeadline = now() + INJECT_SEND_WAIT_MS;
+      let sent = false;
+      while (!sent && now() < sendDeadline) {
+        if (click('send')) sent = true;
+        else await sleep(150);
+      }
+      if (!sent) {
+        log('warn', '提示词已写入，但「发送」按钮一直没出现，请手动发送');
+        return false;
+      }
+      // 等输入框真的清空，确认这条发出去了
+      const clearDeadline = now() + INJECT_SEND_WAIT_MS;
+      let cleared = false;
+      while (!cleared && now() < clearDeadline) {
+        await sleep(150);
+        const pm = document.querySelector(COMPOSER_SELECTOR);
+        cleared = !pm || !String(pm.innerText || pm.textContent || '').trim();
+      }
+      log('ok', '已在新会话注入提示词，请等待 ChatGPT 回忆任务要求' + (cleared ? '' : '（文字还在输入框里，可能没发出去）'));
+      // 发出去之后再压一小会儿：让 GPT 真正开始回答，避免紧接着开录把答话录进去
+      await sleep(INJECT_POST_WAIT_MS);
+      return cleared;
+    } finally {
+      S.injecting = false;
+    }
+  }
+
+  /** 等输入框出现（新会话刚加载时它比别的东西晚一步）。 */
+  async function waitForComposer(timeoutMs) {
+    const deadline = now() + Math.max(500, Number(timeoutMs) || 0);
+    for (;;) {
+      const pm = document.querySelector(COMPOSER_SELECTOR)
+        || document.querySelector('[contenteditable="true"]');
+      if (pm) return pm;
+      if (now() >= deadline) return null;
+      await sleep(120);
+    }
   }
 
   /** 检测到上下文满之后的整套动作：抢救未发送段 → 跳新会话 → 记冷却。 */
@@ -1855,17 +1956,20 @@
         setState('idle');
       }
 
-      // 进入新会话（首跳 / → /c/... 也算）后自动注入任务提示词
-      const enteredNewConversation =
-        (conversationChanged && !!currentId) || (firstChatTransition && !!currentId);
-      if (enteredNewConversation && S.running &&
-          S.settings.autoInjectPrompt !== false &&
-          now() - (S.injectAt || 0) > INJECT_COOLDOWN_MS) {
-        setTimeout(() => {
-          if (!S.running) return;
-          injectPrompt().catch(() => {});
-        }, INJECT_SETTLE_MS);
-      }
+      /*
+       * 进入新会话后自动注入任务提示词。
+       *
+       * 关键：**新会话是在「/」这个空白页开始的**，那里还没有 /c/<id>。
+       * 以前只认 / → /c/<id> 这一跳，可那一跳是"我们自己发出的第一段"造成的，
+       * 于是提示词永远慢一步：先开录、录完发出去，才轮到这个跳转触发注入。
+       * 用户看到的就是"新会话第一句没有记忆提醒，第二轮才冒出来"。
+       * 现在改成两个真正的新会话时机：①从某个会话退回空白页 ②会话与会话之间切换。
+       * 单纯 / → /c/<id>（自己发第一段造成的）不再当成新会话。
+       */
+      const arrivedAtRoot = !currentId && !!previousId;
+      const switchedConversation = !!currentId && !!previousId && previousId !== currentId;
+      if (arrivedAtRoot) queuePromptInjection('回到空白新会话');
+      else if (switchedConversation) queuePromptInjection('切换到新会话');
 
       postStatus();
     }
@@ -1874,9 +1978,12 @@
   /*
    * 全自动：页面加载后如果"自动开始"是开的，就自己跑起来，不需要人点任何东西。
    * 等 5 秒是为了让界面侧把用户存的设置送过来（界面比页面脚本晚一步加载）。
+   *
+   * 必须同时看到 autoStartPreferenceSet 才认：旧版默认就是开，凡是存过设置的人
+   * 都被动带上了 autoStart:true，光看 autoStart 会让老用户升级后照样自己开录。
    */
   setTimeout(() => {
-    if (S.settings.autoStart && !S.running) {
+    if (S.settings.autoStart && S.settings.autoStartPreferenceSet === true && !S.running) {
       S.autoStarted = true;
       api.start('自动开始');
     }

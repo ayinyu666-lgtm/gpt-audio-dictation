@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.1 - 2026-10-21
+
+- Fixed the new-conversation prompt sometimes being sent a turn late, and sometimes being sent twice in a row.
+- Sent the prompt before the first recording starts, including when the session opens on the blank new-chat page.
+- Stopped the extension from auto-starting recording for people upgrading from a version whose stored settings already had it on.
+
 ## 1.3.0 - 2026-10-21
 
 - Added automatic detection of the ChatGPT context-limit banner and an automatic jump to a new conversation when it appears.

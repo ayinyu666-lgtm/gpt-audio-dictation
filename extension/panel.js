@@ -31,6 +31,10 @@
     smooth: 0.08,
     settleAfterSendMs: 400,
     autoStart: false,
+    // 只有用户亲手点过"自动开始"开关，才记为 true。
+    // 旧版默认是开，任何人只要动过任意一个设置，就会把 autoStart:true 一起存进去；
+    // 光改 DEFAULTS 会被已存的值盖掉，升级后照样自己开录。用这个标记判断"用户真的选过"。
+    autoStartPreferenceSet: false,
     autoJumpNewSession: true,
     autoInjectPrompt: true,
     newSessionPrompt: '回忆关于会议记录/翻译相关的任务要求，根据要求开始任务。',
@@ -59,13 +63,27 @@
           // Older installs stored the old default false without a first-run marker.
           // Turn saving on once for the guided setup; later explicit off choices persist.
           const explicitSaveChoice = saved.savePreferenceSet === true;
-          return { ...DEFAULTS, ...saved, saveEnabled: explicitSaveChoice ? !!saved.saveEnabled : true };
+          // 旧版默认自动开始，凡是存过设置的人都被动带上了 autoStart:true。
+          // 没有 autoStartPreferenceSet 标记的，一律按"没选过"处理，回到默认的停。
+          const explicitAutoStart = saved.autoStartPreferenceSet === true;
+          return {
+            ...DEFAULTS,
+            ...saved,
+            saveEnabled: explicitSaveChoice ? !!saved.saveEnabled : true,
+            autoStart: explicitAutoStart ? !!saved.autoStart : false
+          };
         } catch { return { ...DEFAULTS }; }
       }
       try {
         const saved = JSON.parse(localStorage.getItem('gad.settings') || '{}');
         const explicitSaveChoice = saved.savePreferenceSet === true;
-        return { ...DEFAULTS, ...saved, saveEnabled: explicitSaveChoice ? !!saved.saveEnabled : true };
+        const explicitAutoStart = saved.autoStartPreferenceSet === true;
+        return {
+          ...DEFAULTS,
+          ...saved,
+          saveEnabled: explicitSaveChoice ? !!saved.saveEnabled : true,
+          autoStart: explicitAutoStart ? !!saved.autoStart : false
+        };
       }
       catch { return { ...DEFAULTS }; }
     },
@@ -1142,7 +1160,7 @@
   bindNum(numLoudCap, 'loudCap', 0.1, 1);
   bindNum(numSmooth, 'smooth', 0.02, 0.5);
   bindNum(numSettle, 'settleAfterSendMs', 0, 5000);
-  chkAuto.onchange = () => { settings.autoStart = chkAuto.checked; pushConfig(); };
+  chkAuto.onchange = () => { settings.autoStart = chkAuto.checked; settings.autoStartPreferenceSet = true; pushConfig(); };
   chkAutoTab.onchange = () => { settings.autoOpenTab = chkAutoTab.checked; pushConfig(); };
   chkSave.onchange = () => { settings.saveEnabled = chkSave.checked; settings.savePreferenceSet = true; pushConfig(); if (chkSave.checked) pingWriter(); };
   btnPing.onclick = () => pingWriter();

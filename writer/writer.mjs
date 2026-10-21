@@ -24,7 +24,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = path.join(HERE, 'config.json');
 const LOG_DIR = path.join(HERE, 'logs');
 const TELEMETRY_FILE = path.join(LOG_DIR, 'telemetry.jsonl');
-const SERVICE_VERSION = '1.3.0';
+const SERVICE_VERSION = '1.3.1';
 const STARTED_AT = new Date().toISOString();
 
 // 工具自身的运行状态（不含任何 ChatGPT 会话内容），用来排查"为什么不发送"
