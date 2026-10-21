@@ -126,7 +126,7 @@ async function main() {
   // 临时目录里放一份 writer.mjs 副本 + 独立 config.json，这样连配置都不会碰真实的
   const tmpBase = mkdtempSync(path.join(os.tmpdir(), 'gad-verify-'));
   const appDir = path.join(tmpBase, 'app');
-  const saveRoot = path.join(tmpBase, '冬季学期');
+  const saveRoot = path.join(tmpBase, "archive-root");
   mkdirSync(appDir, { recursive: true });
   mkdirSync(saveRoot, { recursive: true });
   copyFileSync(SRC_WRITER, path.join(appDir, 'writer.mjs'));
@@ -135,10 +135,10 @@ async function main() {
   while (!(await portFree(port))) port += 1;
 
   const courseDirs = {
-    '回收-舒伯特': '回收技术-舒伯特',
-    '系统技术-马丁': '系统控制',
-    '系统技术-大作业': '系统大作业',
-    '回收-希望': '回收技术-希望'
+    '课程A': '课程A-正式',
+    '课程B': '课程B-正式',
+    '课程C': '课程C-正式',
+    '课程D': '课程D-正式'
   };
   const tempConfig = {
     port,
@@ -146,7 +146,7 @@ async function main() {
     course: '',
     subDir: '原始录音',
     courseDirs,
-    courses: ['回收-舒伯特', 'AVEVA-舒伯特', '系统技术-马丁', '系统技术-大作业', '回收-希望', '绿色-Nitsche', '系统控制-Liebscher'],
+    courses: ['课程A', '课程F', '课程B', '课程C', '课程D', '课程E', '课程B-正式'],
     fileNamePattern: '{date} {weekday} {time}',
     includeGerman: true,
     includeChinese: true,
@@ -169,7 +169,7 @@ async function main() {
     const ping = await waitForPing(port);
     if (!ping) throw new Error('临时 writer 没起来。日志：\n' + childLog);
     assert('实例启动 /ping 返回 rootDir = 临时根目录', path.resolve(ping.rootDir) === path.resolve(saveRoot), ping.rootDir);
-    assert('/ping 带 courseDirs', ping.courseDirs && ping.courseDirs['回收-舒伯特'] === '回收技术-舒伯特', JSON.stringify(ping.courseDirs));
+    assert('/ping 带 courseDirs', ping.courseDirs && ping.courseDirs['课程A'] === '课程A-正式', JSON.stringify(ping.courseDirs));
 
     const base = Date.now();
     let seq = 0;
@@ -196,22 +196,22 @@ async function main() {
     /* 用例 1：有映射 → 落到映射后的目录 */
     {
       const when = stamp();
-      const { r } = await save('回收-舒伯特', {}, when);
-      const want = rel('回收技术-舒伯特', '原始录音', expectedFileName(when, '回收-舒伯特') + '.md');
+      const { r } = await save('课程A', {}, when);
+      const want = rel('课程A-正式', '原始录音', expectedFileName(when, '课程A') + '.md');
       assert('1 课程名有映射 → 落到映射目录（并沿用 config 子文件夹）',
         r.status === 200 && r.body && r.body.file && path.resolve(r.body.file) === path.resolve(want) && existsSync(want),
         r.body && r.body.file);
       const head = existsSync(want) ? readFileSync(want, 'utf8') : '';
       const headLines = head.split(/\r?\n/).map((l) => l.trim());
-      assert('1b 文件头仍显示原始课程名', headLines.includes('# 回收-舒伯特'),
+      assert('1b 文件头仍显示原始课程名', headLines.includes('# 课程A'),
         headLines.find((l) => l.startsWith('# ')) || '(没有 # 标题行)');
     }
 
     /* 用例 2：无映射 → 落到同名目录 */
     {
       const when = stamp();
-      const { r } = await save('绿色-Nitsche', {}, when);
-      const want = rel('绿色-Nitsche', '原始录音', expectedFileName(when, '绿色-Nitsche') + '.md');
+      const { r } = await save('课程E', {}, when);
+      const want = rel('课程E', '原始录音', expectedFileName(when, '课程E') + '.md');
       assert('2 课程名无映射 → 落到同名目录',
         r.status === 200 && path.resolve(r.body.file) === path.resolve(want) && existsSync(want),
         r.body && r.body.file);
@@ -220,8 +220,8 @@ async function main() {
     /* 用例 3：body 传 subDir → 用 body 的值（映射课程 + 自定义子目录） */
     {
       const when = stamp();
-      const { r } = await save('回收-舒伯特', { subDir: '测试子目录' }, when);
-      const want = rel('回收技术-舒伯特', '测试子目录', expectedFileName(when, '回收-舒伯特') + '.md');
+      const { r } = await save('课程A', { subDir: '测试子目录' }, when);
+      const want = rel('课程A-正式', '测试子目录', expectedFileName(when, '课程A') + '.md');
       assert('3 body 传 subDir → 用 body 的值',
         r.status === 200 && path.resolve(r.body.file) === path.resolve(want) && existsSync(want),
         r.body && r.body.file);
@@ -230,8 +230,8 @@ async function main() {
     /* 用例 4：body 不传 subDir → 用 config 的 subDir */
     {
       const when = stamp();
-      const { r } = await save('AVEVA-舒伯特', {}, when);
-      const want = rel('AVEVA-舒伯特', '原始录音', expectedFileName(when, 'AVEVA-舒伯特') + '.md');
+      const { r } = await save('课程F', {}, when);
+      const want = rel('课程F', '原始录音', expectedFileName(when, '课程F') + '.md');
       assert('4 body 不传 subDir → 用 config 的 原始录音',
         r.status === 200 && path.resolve(r.body.file) === path.resolve(want) && existsSync(want),
         r.body && r.body.file);
@@ -240,8 +240,8 @@ async function main() {
     /* 用例 5：body 传空字符串 → 直接放课程目录下 */
     {
       const when = stamp();
-      const { r } = await save('AVEVA-舒伯特', { subDir: '' }, when);
-      const want = rel('AVEVA-舒伯特', expectedFileName(when, 'AVEVA-舒伯特') + '.md');
+      const { r } = await save('课程F', { subDir: '' }, when);
+      const want = rel('课程F', expectedFileName(when, '课程F') + '.md');
       assert('5 body 传空字符串 → 直接放课程目录下',
         r.status === 200 && path.resolve(r.body.file) === path.resolve(want) && existsSync(want),
         r.body && r.body.file);
@@ -254,7 +254,7 @@ async function main() {
       let allRejected = true;
       const detail = [];
       for (const bad of bads) {
-        const { r } = await save('绿色-Nitsche', { subDir: bad }, stamp());
+        const { r } = await save('课程E', { subDir: bad }, stamp());
         const rejected = r.status >= 400 && r.status < 500;
         if (!rejected) allRejected = false;
         detail.push(`${JSON.stringify(bad)}→${r.status}`);
@@ -265,17 +265,17 @@ async function main() {
         detail.join(' '));
     }
 
-    /* 用例 7：目录不存在 → 递归自动创建（映射到尚不存在的 系统控制 / 系统大作业） */
+    /* 用例 7：目录不存在 → 递归自动创建（映射到尚不存在的 课程B-正式 / 课程C-正式） */
     {
       const when = stamp();
-      const { r } = await save('系统技术-马丁', {}, when);
-      const deep = rel('系统控制', '原始录音');
-      const want = path.join(deep, expectedFileName(when, '系统技术-马丁') + '.md');
+      const { r } = await save('课程B', {}, when);
+      const deep = rel('课程B-正式', '原始录音');
+      const want = path.join(deep, expectedFileName(when, '课程B') + '.md');
       const ok = r.status === 200 && existsSync(want) && statSync(deep).isDirectory();
       assert('7 目标目录不存在 → 递归创建后写入', ok, r.body && r.body.file);
 
       const when2 = stamp();
-      const { r: r2 } = await save('系统技术-大作业', { subDir: '二级/../x' }, when2);
+      const { r: r2 } = await save('课程C', { subDir: '二级/../x' }, when2);
       assert('7b 二级路径片段同样被拒绝', r2.status === 400, `status ${r2.status}`);
     }
 

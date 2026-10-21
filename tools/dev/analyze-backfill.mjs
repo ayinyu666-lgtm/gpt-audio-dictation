@@ -1,14 +1,18 @@
 /*
- * 分析：把今天 9 个会话的 user 轮次，与磁盘上已落盘的段落做指纹比对，找出漏落的。
+ * 分析：把导出的会话 JSON 里的 user 轮次，与磁盘上已落盘的段落做指纹比对，找出漏落的。
  * 只读，不写盘。
+ *
+ * 用法：node tools/dev/analyze-backfill.mjs <conversations.json> <归档根目录> [第二个归档根目录]
+ * 可选环境变量 DATE_PREFIX=2026-10-21 只统计某一天的轮次（ISO 前缀匹配）。
  */
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-const EXPORT = 'E:/AI/工作目录/日志/web-ai/tmp/conv-2026-10-21-all.json';
-const ROOT = 'C:/Users/YuLong/Desktop/硕士学习文件/冬季学期';
-const DABAN = 'E:/AI/工作目录/硕士-系统控制-大作业';
+const EXPORT = process.argv[2] || 'conversations.json';
+const ROOT = process.argv[3] || 'archive-root';
+const DABAN = process.argv[4] || '';
 
+const DATE_PREFIX = process.env.DATE_PREFIX || '';
 const data = JSON.parse(readFileSync(EXPORT, 'utf8'));
 
 function nodeText(n) {
@@ -35,7 +39,7 @@ for (const conv of data) {
     if (!ts) continue;
     // 只要今天(2026-10-21)柏林时间的
     const iso = ts.toISOString();
-    if (!iso.startsWith('2026-10-2')) continue;
+    if (DATE_PREFIX && !iso.startsWith(DATE_PREFIX)) continue;
     turns.push({ convId: conv.id, convTitle: conv.json.title, ts, text: t });
   }
 }
@@ -63,7 +67,7 @@ for (const entry of readdirSync(ROOT, { withFileTypes: true })) {
   archived.push(...collect(join(ROOT, entry.name, '原始录音')));
   archived.push(...collect(join(ROOT, entry.name)));
 }
-archived.push(...collect(join(DABAN, '原始录音')));
+if (DABAN) archived.push(...collect(join(DABAN, '原始录音')));
 console.log('磁盘已有段数:', archived.length);
 
 function norm(s) {

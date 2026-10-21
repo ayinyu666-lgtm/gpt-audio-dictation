@@ -3,10 +3,11 @@
   "rootDir": "",
   "course": "",
   "courses": [],
+  "courseDirs": {},
   "subDir": "",
   "fileNamePattern": "{date} {weekday} {time}",
   "includeGerman": true,
   "includeChinese": true,
   "writeSessionHeader": true,
-  "_comment": "The first run can create config.json automatically. rootDir and courses are intentionally empty in the public example. The field names includeGerman and includeChinese are kept for backward compatibility: they control whether the raw transcript and the GPT answer are written."
+  "_comment": "The first run can create config.json automatically. rootDir, courses and courseDirs are intentionally empty in the public example. courseDirs maps a display course name to the folder name on disk, e.g. {\"Short name\": \"Folder name\"}. The field names includeGerman and includeChinese are kept for backward compatibility: they control whether the raw transcript and the GPT answer are written."
 }

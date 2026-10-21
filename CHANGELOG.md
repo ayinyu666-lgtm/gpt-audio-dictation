@@ -14,8 +14,11 @@
 - Changed the default so the extension no longer starts recording on its own; press start to begin.
 - Followed the new ChatGPT dictation buttons: recording now ends with "发送" instead of the removed "转录并发送".
 - Treated "停止听写" as discard rather than finish, and recognized the transient "正在完成听写" state.
-- Waited for the composer to actually clear before judging a send, since the new UI takes about 3.5 seconds.
+- Waited for the composer to actually clear before judging a send, since the new UI keeps the text in the box for a while after clicking 发送.
 - Made the lowest aggressiveness setting at least three times more conservative while leaving the top end unchanged.
+- Skipped disabled buttons when clicking, so the extension no longer blind-clicks the dictation button while ChatGPT is still generating.
+- Started the next recording as soon as the dictation button re-enables instead of waiting out a fixed two-second backoff.
+- Measured the send-to-next-recording gap: the button re-enables exactly when generation ends and recording starts about half a second later.
 
 ## 1.2.1 - 2026-10-20
 
