@@ -50,6 +50,14 @@
   const INJECT_RECORD_BLOCK_MS = 45000;   // 注入后这段时间内、GPT 还在输出时不开新录
 
   /*
+   * 点了「发送」之后，输入框多久才清空。
+   * 实测（2026-10-21 新版 UI）：+1.75s 按钮就恢复可点了，但输入框要到 +3.5s 才清。
+   * 以前只等 700ms，必然看到文字还在，把已发出的段误判成"没发出去"→ 不落盘。
+   * 给到 8 秒是为了覆盖慢网络，正常 3.5 秒就命中退出。
+   */
+  const SEND_CLEAR_WAIT_MS = 8000;
+
+  /*
    * 上下文已满的判据：中英双语都要覆盖，用户界面可能切换语言。
    *
    * 这里只放"这个会话装不下了"的说法。**绝不能**出现「新聊天 / New chat」——
@@ -616,13 +624,23 @@
    */
   const BUTTON_LABELS = {
     dictate: ['听写', '开始听写', 'Dictate', 'Start dictation', 'Diktieren'],
+    /*
+     * 旧版一键收口：点它=停止录音并直接把转写文字发出去。
+     * 2026-10-21 起 ChatGPT 改了版，这个按钮在所有会话里都不见了，
+     * 现在收口是「停止听写」+「发送」两步（且「停止听写」是"放弃"语义，点了文字就没了）。
+     * 保留旧标签是为了哪天它回来还能用，不是死代码。
+     */
     transcribeSend: ['转录并发送', '发送转录', 'Transcribe and send', 'Transcribe & send', 'Transkribieren und senden'],
     cancelTranscribe: ['取消转录', '停止转录', 'Cancel transcription', 'Stop transcription', 'Transkription abbrechen'],
     cancelDictate: [
-      '取消听写', '停止听写', '正在启动听写；点击可取消',
-      'Cancel dictation', 'Stop dictation', 'Starting dictation; click to cancel',
+      '取消听写', '正在启动听写；点击可取消',
+      'Cancel dictation', 'Starting dictation; click to cancel',
       'Diktat abbrechen', 'Diktat wird gestartet'
     ],
+    /* 新版录音中的常驻按钮。注意语义：点它=放弃，不是收口。 */
+    stopDictate: ['停止听写', 'Stop dictation'],
+    /* 新版点了「发送」之后的中间态：正在把转写文字收尾，这时候必须等，不能判定。 */
+    finishingDictate: ['正在完成听写', 'Finishing dictation'],
     send: ['发送', 'Send', 'Senden']
   };
 
@@ -645,13 +663,23 @@
   function readUi() {
     const pm = document.querySelector('div.ProseMirror[contenteditable="true"]')
       || document.querySelector('[contenteditable="true"]');
-    const dictationActive = !!btn('transcribeSend') || !!btn('cancelDictate');
+    /*
+     * 录音中 = 旧版「转录并发送」在，或新版「停止听写」在，或新版正在收尾（正在完成听写）。
+     * 「停止听写」在旧版只是"启动中、可取消"，在新版是录音期的常驻按钮，两种都算在录音。
+     */
+    const dictationActive = !!btn('transcribeSend') || !!btn('cancelDictate')
+      || !!btn('stopDictate') || !!btn('finishingDictate');
+    /*
+     * 收尾中（新版点了发送之后那几秒）：这时候输入框里的文字还没清掉，
+     * 既不能当成"还在录"，也不能当成"已经发完"，必须判成 transcribing 让主循环等着。
+     */
+    const finishing = !!btn('finishingDictate');
     return {
       hasComposer: !!pm,
       composerText: pm ? (pm.innerText || '').replace(/\s+/g, '') : '',
-      recording: dictationActive,
+      recording: dictationActive && !finishing,
       dictationStarting: !btn('transcribeSend') && !!btn('cancelDictate'),
-      transcribing: !!btn('cancelTranscribe'),
+      transcribing: !!btn('cancelTranscribe') || finishing,
       micIdle: !!btn('dictate'),
       generating: !!buttonFor(['停止', 'Stop', 'Stopp'])
     };
@@ -682,6 +710,19 @@
   }
 
   /**
+   * 分段节奏曲线：给三个锚点（激进 1 / 默认 4 / 最激进 10），中间线性插值。
+   *
+   * 为什么要分两段：2026-10-21 用户要求"最低档要比原来保守 3 倍以上，上限不变"。
+   * 如果整条线一起拉伸，默认档（4）会被带着一起变保守，那不是他要的。
+   * 所以锚点定在 1 / 4 / 10：两端各自插值，默认档这点的值保持原样。
+   */
+  function curve3(eff, vLow, vMid, vHigh) {
+    const e = clamp(Number(eff) || 1, 1, 10);
+    if (e <= 4) return vLow + (vMid - vLow) * ((e - 1) / 3);
+    return vMid + (vHigh - vMid) * ((e - 4) / 6);
+  }
+
+  /**
    * 把生效激进程度 + 量到的停顿节奏换算成一组阈值。
    *
    * 两件事分开：
@@ -694,13 +735,19 @@
     const st = S.settings;
     const eff = effectiveAgg();
     const t = (eff - 1) / 9;
-    const rampStartSec = Math.round(lerp(24, 6, t));
-    const softTargetSec = Math.round(lerp(140, 40, t));
+    const rampStartSec = Math.round(curve3(eff, 72, 18, 6));
+    const softTargetSec = Math.round(curve3(eff, 420, 107, 40));
     const maxSegmentMs = clamp((Number(st.maxSegmentSec) || 300) * 1000, 20000, 540000);
     const minSpeechMs = clamp((Number(st.minSpeechSec) || 4) * 1000, 1000, 60000);
     const minSegmentMs = clamp((Number(st.minSegmentSec) || 6) * 1000, 2000, 120000);
 
-    const aggScale = clamp(1 + (4 - eff) * 0.12, 0.6, 1.8);
+    /*
+     * 保守侧（1～4）的斜率是原来的约 8.6 倍：最低档 1.36 → 4.09，正好 3 倍。
+     * 激进侧（4～10）沿用原来的 0.12，最激进档还是 0.6，跟改之前一模一样。
+     */
+    const aggScale = eff <= 4
+      ? clamp(1 + (4 - eff) * 1.03, 1, 4.2)
+      : clamp(1 + (4 - eff) * 0.12, 0.6, 1);
     const p50 = pausePercentile(0.5);
     const p90 = pausePercentile(0.9);
     const p30 = pausePercentile(0.3);
@@ -708,19 +755,20 @@
     let maxPauseMs, minPauseMs, ultimateMs, learned;
     if (p90 != null) {
       learned = true;
-      maxPauseMs = clamp(Math.round(p90 * 1.1 * aggScale), 900, 4000);
-      minPauseMs = clamp(Math.round(p50 * 1.3 * aggScale), 350, 1800);
-      ultimateMs = clamp(Math.round(p30 * 1.1 * aggScale), 250, 900);
+      // 上限跟着放宽，否则最低档算出来的长停顿会被 4000/1800/900 这些旧天花板削平
+      maxPauseMs = clamp(Math.round(p90 * 1.1 * aggScale), 900, 12000);
+      minPauseMs = clamp(Math.round(p50 * 1.3 * aggScale), 350, 6000);
+      ultimateMs = clamp(Math.round(p30 * 1.1 * aggScale), 250, 3000);
     } else {
       learned = false;
-      maxPauseMs = Math.round(lerp(3200, 900, t));
-      minPauseMs = Math.round(lerp(950, 380, t));
+      maxPauseMs = Math.round(curve3(eff, 9600, 2433, 900));
+      minPauseMs = Math.round(curve3(eff, 2850, 760, 380));
       ultimateMs = clamp(Math.round(minPauseMs * 0.5), 300, minPauseMs);
     }
 
     // 手动覆盖永远优先
-    if (Number(st.pauseCeilMs) > 0) maxPauseMs = clamp(Number(st.pauseCeilMs), 200, 8000);
-    if (Number(st.pauseFloorMs) > 0) minPauseMs = clamp(Number(st.pauseFloorMs), 150, 5000);
+    if (Number(st.pauseCeilMs) > 0) maxPauseMs = clamp(Number(st.pauseCeilMs), 200, 30000);
+    if (Number(st.pauseFloorMs) > 0) minPauseMs = clamp(Number(st.pauseFloorMs), 150, 20000);
     minPauseMs = Math.min(minPauseMs, maxPauseMs);
     ultimateMs = Math.min(ultimateMs, minPauseMs);
 
@@ -1037,14 +1085,18 @@
     const seg = S.segment;
     if (!seg) return;
     S.lastReason = reason;
-    const dispatchAttempted = viaClick ? click('transcribeSend') : false;
+    /*
+     * 收口动作：旧版一键「转录并发送」优先；新版没有这个按钮，改成点「发送」。
+     * 新版「停止听写」是"放弃"语义（点了转写文字就没了），绝不能拿来收口。
+     */
+    const dispatchAttempted = viaClick ? (click('transcribeSend') || click('send')) : false;
     S.pending = { seg, reason, t0: now(), dispatchAttempted };
     S.segment = null;
     setState('finalizing', reason);
     log('info', '第 ' + seg.index + ' 段收口：' + reason +
       '（时长 ' + Math.round((now() - seg.startTs) / 1000) + 's，说话 ' + Math.round(seg.speechMs / 1000) + 's）');
     if (viaClick && !dispatchAttempted) {
-      log('error', '找不到“转录并发送”按钮，本段不会判定为已发送');
+      log('error', '找不到“转录并发送”或“发送”按钮，本段不会判定为已发送');
     }
   }
 
@@ -1071,9 +1123,22 @@
       if (ui.composerText) {
         log('warn', '文字留在输入框里没自动发出去，补点一次“发送”');
         const fallbackDispatched = click('send');
-        await sleep(700);
-        const ui2 = readUi();
-        sent = fallbackDispatched && !ui2.composerText;
+        /*
+         * 实测（2026-10-21）：点了「发送」之后输入框要 3.5 秒才清空，
+         * 中间还会短暂出现「正在完成听写」。只等 700ms 就查必然看到文字还在，
+         * 于是把已经发出去的段误判成"没发出去"，直接不落盘。
+         * 这里改成轮询等清空，最多等 8 秒，清空即判定已发送。
+         */
+        const deadline = now() + SEND_CLEAR_WAIT_MS;
+        let cleared = !readUi().composerText;
+        while (!cleared && now() < deadline) {
+          await sleep(200);
+          cleared = !readUi().composerText;
+        }
+        if (fallbackDispatched && cleared) {
+          log('ok', '补发成功（输入框已清空）');
+        }
+        sent = fallbackDispatched && cleared;
       } else {
         log('error', '输入框为空且没有确认发送动作，本段保持未发送');
       }

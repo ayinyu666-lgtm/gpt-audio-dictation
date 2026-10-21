@@ -12,6 +12,10 @@
 - Added a course-to-folder alias map so one course with two names keeps a single folder.
 - Rebuilt the archive destination flow into root directory, subdirectory, and course, with a full path preview.
 - Changed the default so the extension no longer starts recording on its own; press start to begin.
+- Followed the new ChatGPT dictation buttons: recording now ends with "发送" instead of the removed "转录并发送".
+- Treated "停止听写" as discard rather than finish, and recognized the transient "正在完成听写" state.
+- Waited for the composer to actually clear before judging a send, since the new UI takes about 3.5 seconds.
+- Made the lowest aggressiveness setting at least three times more conservative while leaving the top end unchanged.
 
 ## 1.2.1 - 2026-10-20
 
