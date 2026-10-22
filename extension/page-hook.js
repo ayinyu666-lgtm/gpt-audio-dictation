@@ -1560,7 +1560,7 @@
         user: turn.userText,
         assistant: answer,
         // 空串有意义：writer 收到 '' 就把文件直接放课程目录，不要替换成默认值
-        subDir: String(S.settings.saveSubDir == null ? '' : S.settings.saveSubDir)
+        subDir: saveTarget().subDir
       });
       job.submittedAt = now();
       persistSaveQueue();
@@ -1573,6 +1573,26 @@
   setInterval(() => { try { processSaveQueue(); } catch { /* 忽略 */ } }, 1500);
 
   /* ------------------------- 5. 状态上报 ------------------------- */
+
+  /**
+   * 子文件夹名清洗。writer 收到含路径分隔符的名字会直接回 invalid_subdir，
+   * 那样每一段都失败，而面板只显示"落盘失败"，看不出是路径问题。
+   * 这里在送出去之前先折掉非法字符，保证落盘不会因为一个脏值全线停摆。
+   */
+  function cleanSubDir(v) {
+    return String(v == null ? '' : v)
+      .replace(/[\\/:*?"<>|\r\n\t]/g, '-')
+      .replace(/\s+/g, ' ')
+      .replace(/^[.\s-]+|[.\s-]+$/g, '')
+      .trim();
+  }
+
+  /** 本段的落盘参数。 */
+  function saveTarget() {
+    const clean = cleanSubDir(S.settings.saveSubDir);
+    // 清洗后为空 = 用户确实想直接放课程目录，不要再塞回默认值
+    return { subDir: clean };
+  }
 
   function buildStatus() {
     const t = tuning();

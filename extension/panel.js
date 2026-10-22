@@ -54,6 +54,43 @@
     pos: null
   };
 
+  /**
+   * 子文件夹名清洗：writer 会明确拒绝含路径分隔符的名字（invalid_subdir），
+   * 一旦存进设置，之后每一次落盘都会失败，而小条上只会显示"落盘失败"，
+   * 看起来像服务挂了。这里提前把非法字符换成 '-'，从源头堵住。
+   */
+  const sanitizeSubDir = (v) => String(v == null ? '' : v)
+    .replace(/[\\/:*?"<>|\r\n\t]/g, '-')
+    .replace(/\s+/g, ' ')
+    .replace(/^[.\s-]+|[.\s-]+$/g, '')
+    .trim();
+  const SAFE_SUBDIR = sanitizeSubDir(DEFAULTS.saveSubDir);
+  // 文件夹名是给人看的，正常就几个字；过长基本可以断定是被别的内容污染了
+  const SUBDIR_MAX_LEN = 40;
+  /**
+   * 设置装载时修掉历史脏值。
+   * 曾经发生过：提示词全文被写进 saveSubDir（"原始录音回忆关于会议记录/翻译…"），
+   * 里面带 '/'，writer 每次都判非法 → 所有段落都写不进去，而且小条上只显示"落盘失败"。
+   * 光把 '/' 换成 '-' 不够：那串文字本身也不该当目录名，所以长的脏值直接回默认。
+   */
+  function repairSettings(s) {
+    const out = { ...s };
+    const clean = sanitizeSubDir(out.saveSubDir);
+    const prompt = String(out.newSessionPrompt == null ? '' : out.newSessionPrompt).trim();
+    /*
+     * 判脏两条：
+     *  1) 目录名里出现了提示词的片段（本机真实事故就是这种：整句提示词被粘进了目录名）；
+     *  2) 清洗后仍然过长 —— 正常目录名就几个字。
+     * 只把 '/' 换成 '-' 是不够的，那串文字本身也不该当目录名。
+     */
+    const promptHead = prompt.replace(/\s+/g, '').slice(0, 8);
+    const squeezed = clean.replace(/\s+/g, '');
+    const hasPrompt = promptHead.length >= 4 && squeezed.includes(promptHead);
+    const polluted = clean.length > SUBDIR_MAX_LEN || hasPrompt;
+    out.saveSubDir = polluted ? SAFE_SUBDIR : (clean || SAFE_SUBDIR);
+    return out;
+  }
+
   const store = {
     async load() {
       if (ISOLATED) {
@@ -66,24 +103,24 @@
           // 旧版默认自动开始，凡是存过设置的人都被动带上了 autoStart:true。
           // 没有 autoStartPreferenceSet 标记的，一律按"没选过"处理，回到默认的停。
           const explicitAutoStart = saved.autoStartPreferenceSet === true;
-          return {
+          return repairSettings({
             ...DEFAULTS,
             ...saved,
             saveEnabled: explicitSaveChoice ? !!saved.saveEnabled : true,
             autoStart: explicitAutoStart ? !!saved.autoStart : false
-          };
+          });
         } catch { return { ...DEFAULTS }; }
       }
       try {
         const saved = JSON.parse(localStorage.getItem('gad.settings') || '{}');
         const explicitSaveChoice = saved.savePreferenceSet === true;
         const explicitAutoStart = saved.autoStartPreferenceSet === true;
-        return {
+        return repairSettings({
           ...DEFAULTS,
           ...saved,
           saveEnabled: explicitSaveChoice ? !!saved.saveEnabled : true,
           autoStart: explicitAutoStart ? !!saved.autoStart : false
-        };
+        });
       }
       catch { return { ...DEFAULTS }; }
     },
@@ -920,7 +957,7 @@
     } else if (!saveOnline) {
       chipSave.textContent = '落盘离线'; chipSave.className = 'chip off';
     } else if (!settings.saveEnabled) {
-      chipSave.textContent = '落盘未开'; chipSave.className = 'chip warn';
+      chipSave.textContent = '落盘未开·点此开启'; chipSave.className = 'chip warn';
     } else if (pageWaitingCount) {
       chipSave.textContent = '待保存 ' + pageWaitingCount; chipSave.className = 'chip warn';
     } else if (!lastSaveOkAt) {
@@ -1162,7 +1199,13 @@
   bindNum(numSettle, 'settleAfterSendMs', 0, 5000);
   chkAuto.onchange = () => { settings.autoStart = chkAuto.checked; settings.autoStartPreferenceSet = true; pushConfig(); };
   chkAutoTab.onchange = () => { settings.autoOpenTab = chkAutoTab.checked; pushConfig(); };
-  chkSave.onchange = () => { settings.saveEnabled = chkSave.checked; settings.savePreferenceSet = true; pushConfig(); if (chkSave.checked) pingWriter(); };
+  chkSave.onchange = () => {
+    settings.saveEnabled = chkSave.checked;
+    settings.savePreferenceSet = true;
+    saveSettings();
+    pushConfig();
+    if (chkSave.checked) pingWriter();
+  };
   btnPing.onclick = () => pingWriter();
   btnClearBlocked.onclick = () => {
     send('clearBlockedSaves');
@@ -1240,7 +1283,28 @@
   }
   btnChooseRoot.onclick = () => chooseFolder(false);
   btnSetupRoot.onclick = () => chooseFolder(false);
-  chipSave.onclick = () => { if (!writerRoot || !saveOnline) chooseFolder(false); else pingWriter(); };
+  /*
+   * 小条上的落盘标签同时是快捷入口：
+   *  - 关着 → 点一下直接打开（这是最常见的困惑：明明启动了 writer，怎么还是"未开"）
+   *  - 没根目录 / 离线 → 去选目录
+   *  - 其它情况 → 重新探一次服务
+   */
+  chipSave.onclick = () => {
+    if (!settings.saveEnabled) {
+      settings.saveEnabled = true;
+      settings.savePreferenceSet = true;
+      chkSave.checked = true;
+      chkSave.style.background = '#1d4ed8';
+      saveSettings();
+      pushConfig();
+      pingWriter();
+      saveStatus.textContent = '已打开归档；从下一段开始写入本地文件';
+      log_local('info', '已通过小条打开落盘');
+      return;
+    }
+    if (!writerRoot || !saveOnline) chooseFolder(false);
+    else pingWriter();
+  };
 
   function renderRootCandidates(candidates) {
     const list = Array.isArray(candidates) ? candidates : [];
@@ -1363,12 +1427,17 @@
     saveStatus.textContent = '提示词已恢复为默认文案';
   };
   promptBox.onchange = () => {
-    settings.newSessionPrompt = promptBox.value;
+    // trim：粘贴时带进来的换行/空格不该留在设置里
+    settings.newSessionPrompt = promptBox.value.trim();
+    promptBox.value = settings.newSessionPrompt;
     saveSettings();
     pushConfig();
   };
   subDirInput.onchange = () => {
-    settings.saveSubDir = subDirInput.value.trim();
+    // 输入框里敲进来的内容也要过一遍清洗，别让非法字符进了设置再被 writer 拒绝
+    const clean = sanitizeSubDir(subDirInput.value);
+    settings.saveSubDir = clean;
+    subDirInput.value = clean;
     saveSettings();
     pushConfig();
   };

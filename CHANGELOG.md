@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.2 - 2026-10-22
+
+- Fixed a corrupted subfolder name (a pasted prompt containing `/`) silently failing every archive write with `invalid_subdir`.
+- Sanitised the subfolder name on load and on edit, and in the page hook before it reaches the writer.
+- Made the save chip clickable when archiving is off, so it turns saving back on instead of only reporting the state.
+
 ## 1.3.1 - 2026-10-21
 
 - Fixed the new-conversation prompt sometimes being sent a turn late, and sometimes being sent twice in a row.
