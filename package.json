@@ -1,11 +1,13 @@
 {
   "name": "gpt-audio-dictation",
-  "version": "1.3.2",
+  "version": "1.4.0",
   "private": true,
   "description": "ChatGPT web audio dictation automation with local-first transcript archiving.",
   "license": "MIT",
   "scripts": {
     "check": "node scripts/check.mjs",
+    "test:archive": "node tools/mobile-archive/test.mjs",
+    "test:archive:export": "node tools/mobile-archive/local-export.test.mjs",
     "pack": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-release.ps1"
   },
   "engines": {

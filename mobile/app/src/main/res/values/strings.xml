@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_description">在前台 ChatGPT 的中文界面中按设定时长提交录音并续录；界面不明时暂停。</string>
+
+    <!-- Screen chrome -->
+    <string name="app_name">听写助手</string>
+    <string name="app_tagline">ChatGPT 连续录音助手 · 无障碍服务</string>
+    <string name="section_status">运行状态</string>
+    <string name="section_recording">录音设置</string>
+    <string name="section_advanced">高级</string>
+    <string name="section_about">关于</string>
+    <string name="label_service">无障碍服务</string>
+    <string name="label_current_state">当前状态</string>
+    <string name="label_last_pause">最近事件</string>
+    <string name="state_service_on">已启用</string>
+    <string name="state_service_off">未启用</string>
+    <string name="state_running">运行中</string>
+    <string name="state_idle">空闲</string>
+    <string name="state_not_connected">服务未连接</string>
+    <string name="state_waiting">等待中</string>
+    <string name="state_paused">暂停中</string>
+    <string name="service_off_hint">在系统设置中启用「听写助手」后，悬浮钮才会出现。</string>
+    <string name="service_on_hint">服务已连接。保持 ChatGPT 前台和亮屏即可开始。</string>
+    <string name="open_accessibility">打开无障碍设置</string>
+    <string name="btn_start">开始并打开 ChatGPT</string>
+    <string name="btn_pause">停止助手</string>
+
+    <!-- Recording settings -->
+    <string name="label_max_seconds">每条消息最长秒数</string>
+    <string name="desc_max_seconds">到达该秒数会立即发送；越接近该时长，停顿越容易触发发送。设为较短值时会话节奏接近普通聊天。</string>
+    <string name="hint_max_seconds_range">5–1800 秒</string>
+    <string name="label_pause_bias">停顿激进程度</string>
+    <string name="desc_pause_bias">偏灵敏会提前进入“寻找停顿”的区间；偏保守则更晚才愿意因停顿发送。</string>
+    <string name="label_noise_ignore">噪音忽略</string>
+    <string name="desc_noise_ignore">决定多大的画面起伏才算「有人在说话」。左侧更灵敏，右侧更保守。默认「自动」与旧版行为一致，最长时长兜底始终有效。</string>
+    <string name="hint_settings_live">修改会保存，并在下一次开始时生效。噪音忽略的调整在无障碍服务重新连接后生效。</string>
+    <string name="value_seconds">%1$d 秒</string>    <string name="value_bias_standard">标准 0</string>
+    <string name="value_bias_conservative">保守 %1$d</string>
+    <string name="value_bias_sensitive">灵敏 +%1$d</string>
+    <string name="value_noise_auto">自动 0</string>
+    <string name="value_noise_less">少忽略 %1$d</string>
+    <string name="value_noise_more">多忽略 +%1$d</string>
+    <string name="content_desc_slider_range">范围 %1$d 到 %2$d</string>
+
+    <!-- Advanced -->
+    <string name="label_mic_probe">麦克风测试</string>
+    <string name="desc_mic_probe">手动测一次本应用能否收到声音，测完立即释放麦克风。它只反映本应用自己，不证明 ChatGPT 同时在录音。</string>
+    <string name="btn_probe">测一次麦克风</string>
+    <string name="probe_running">正在测试麦克风…</string>
+    <string name="probe_permission_denied">未授予麦克风权限；不影响波形方式</string>
+    <string name="label_diagnostics">测试诊断</string>
+    <string name="desc_diagnostics">记录界面结构与文本哈希（只存哈希，不存原文），用于排查。下一次开始生效，仅 debug 版可见。</string>
+    <string name="label_diag_status">诊断状态</string>
+
+    <!-- About -->
+    <string name="label_version">版本号</string>
+    <string name="label_changelog">更新记录</string>
+    <string name="label_guide">使用说明</string>
+    <string name="about_footer">本应用不采集、不上传、不转写音频；可选麦克风测试由你手动触发。</string>
+    <string name="dialog_close">关闭</string>
+    <string name="dialog_changelog_title">更新记录</string>
+    <string name="dialog_guide_title">使用说明</string>
+    <string name="version_line">%1$s（%2$d）</string>
+
+    <!-- Changelog entries are kept in res/raw/changelog.txt so the release history has one source. -->
+    <string name="section_environment">环境学习</string>
+    <string name="label_environment">当前环境</string>
+    <string name="btn_learn_env">学习当前环境（10 秒）</string>
+    <string name="env_learning_started">正在学习当前环境（10 秒）…</string>
+    <string name="env_learning_need_run">请先开始录音：学习需要读取录音波形</string>
+    <string name="hint_environment">每轮录音会自动学习前 10 秒的环境，识别到的底噪与说话电平会存下来，下次直接当作初值，不用再预热。环境变化后也会自动切换。</string>
+</resources>

@@ -1,13 +1,13 @@
 # GPT Audio Dictation
 
-**面向 ChatGPT 网页端的音频转录、自动分段与本地归档扩展。**
+**面向 ChatGPT 网页端与 Android 的连续音频转录、自动分段、会话归档工具。**
 
 [![checks](https://github.com/ayinyu666-lgtm/gpt-audio-dictation/actions/workflows/ci.yml/badge.svg)](https://github.com/ayinyu666-lgtm/gpt-audio-dictation/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 <img src="extension/icons/icon128.png" width="88" alt="GPT Audio Dictation icon">
 
-它驱动 ChatGPT 网页自身的听写功能，把长音频自动拆成多个片段，继续下一段，并在本地归档模块开启时保存“本段原始转录 + 紧随其后的 GPT 回答”。它并不只用于课堂或翻译：讲座、访谈、会议记录、口述笔记、语言学习和其他需要连续转录的场景都可以使用。
+它驱动 ChatGPT 自身的听写功能，把长音频自动拆成多个片段，继续下一段，并在本地归档模块开启时保存“本段原始转录 + 紧随其后的 GPT 回答”。Windows/Edge 扩展和 Android 助手共享同一使用思路，但代码与权限边界独立。它并不只用于课堂或翻译：讲座、访谈、会议记录、口述笔记、语言学习和其他需要连续转录的场景都可以使用。
 
 > 本项目不是 OpenAI 官方产品，与 OpenAI 没有隶属或背书关系。ChatGPT 网页结构和按钮文案发生变化时，可能需要更新页面适配层。
 
@@ -26,6 +26,9 @@
 - 临时错误自动退避重试；不可自动解决的任务保留为失败状态，可在面板处理。
 - Windows 原生目录选择、可写探针、配置备份与恢复。
 - 本地 Markdown 写入使用内容摘要、重复检测、半段恢复和冲突保护。
+- Android 无障碍助手可在手机前台 ChatGPT 中辅助开始、分段、提交和续录。
+- 浏览器会话归档可按日期范围保存已登录 ChatGPT 会话，日期不明时拒绝猜测。
+- 手机会话快照工具可把外部导出的会话写成严格校验、不可覆盖的本地 Markdown。
 
 ## 它不负责什么
 
@@ -49,9 +52,19 @@
 - Windows 11 优先；其他 Windows 版本可按相同方式尝试。
 - Microsoft Edge 或其他 Chromium 浏览器。
 - Node.js 22 或更高版本，仅在启用本地归档时需要。
+- Android 8.0（API 26）或更高版本，且需要手动启用无障碍服务；屏幕波形停顿检测需要 Android 11（API 30）或更高。
 - 一个可正常使用网页听写功能的 ChatGPT 账号。
 
 ## 快速安装
+
+### Android 手机端
+
+1. 从 Release 下载 `gpt-audio-dictation-android-0.9.4.apk`。
+2. 安装后在 Android 无障碍设置中启用“听写助手”，并允许通知。
+3. 保持手机解锁、亮屏，打开 ChatGPT 中文界面。
+4. 先用可丢弃的短会话试录，确认控件和录音质量后再正式使用。
+
+手机端源码、权限说明、测试与构建方法见 [`mobile/README.md`](mobile/README.md)。
 
 ### 1. 下载并解压
 
@@ -208,11 +221,24 @@ ChatGPT 页面
 
 更详细的结构说明见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 
+## 会话归档
+
+浏览器面板里的“归档”区块会读取 ChatGPT 侧栏会话，按日期范围筛选并保存 Markdown。两种入口都可离线处理导出的会话：
+
+```powershell
+node tools\mobile-archive\cli.mjs init --root 'C:\Temp\gad-archive'
+node tools\mobile-archive\cli.mjs import --root 'C:\Temp\gad-archive' --snapshot 'C:\Temp\snapshot.json'
+```
+
+`mobile-archive` 要求输入快照带稳定消息 ID 和完整性声明；它只负责校验、排队和不可覆盖写入，不抓取网页。详见 [`tools/mobile-archive/README.md`](tools/mobile-archive/README.md)。
+
 ## 隐私与安全
 
 - 只有打开“归档 GPT 回答”时，扩展才读取已发送的用户转录及其后的 GPT 回答。
 - 保存内容先进入浏览器扩展的本地队列，再通过 `127.0.0.1` 交给本地 writer。
 - writer 不会连接外部服务器。
+- Android 助手不会上传或转写音频；可选麦克风测试只在用户点击时短暂占用麦克风。
+- 浏览器的会话归档使用当前登录态读取会话；需要完整性的记录默认拒绝保存。
 - 生成的 Markdown、日志、浏览器配置和个人目录路径默认被 `.gitignore` 排除。
 - 不要公开上传真实转录、账号 Cookie、浏览器配置或包含私人路径的日志。
 
@@ -312,7 +338,7 @@ Copy-Item writer\config.example.json writer\config.json
 
 ## 版本
 
-当前版本：`1.3.2`
+当前版本：`1.4.0`
 
 变更记录见 [`CHANGELOG.md`](CHANGELOG.md)。
 

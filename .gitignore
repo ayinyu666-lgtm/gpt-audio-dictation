@@ -5,10 +5,19 @@ writer/logs/
 .test-edge-profile/
 tmp/
 TODO.md
+DELIVERY-*.md
+_tmp/
+mobile-backup-*/
+extension-install/
+docs/analysis/
+docs/archive/
+docs/live-*/
+docs/measure-*.csv
 
 # Build output
 dist/
 *.zip
+*.apk
 
 # Editor and OS files
 .DS_Store
@@ -21,3 +30,12 @@ Thumbs.db
 # Node
 node_modules/
 npm-debug.log*
+
+# Android local data
+mobile/.gradle/
+mobile/build/
+mobile/app/build/
+mobile/dist/
+mobile/local.properties
+mobile/HANDOFF.md
+mobile/DELIVERY-*.md

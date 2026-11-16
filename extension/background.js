@@ -150,5 +150,83 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
     return false;
   }
 
+  /*
+   * 会话归档：把一批 Markdown 写进「下载目录/课程归档/<日期>/」。
+   * 由内容脚本发起；目录选择/下载必须在扩展上下文执行（content script 里的
+   * showDirectoryPicker 可能被页面策略拦截），所以放在 service worker。
+   */
+  if (msg.type === 'archiveDownload') {
+    (async () => {
+      const files = Array.isArray(msg.files) ? msg.files : [];
+      const folder = String(msg.folder || '课程归档').replace(/[\\:*?"<>|]/g, '_').trim() || '课程归档';
+      const dateFolder = String(msg.dateFolder || '').replace(/[\\:*?"<>|]/g, '_').trim();
+      if (!files.length) { respond({ ok: false, error: '没有可保存的文件' }); return; }
+      const sub = dateFolder ? folder + '/' + dateFolder + '/' : folder + '/';
+      const written = [];
+      for (const file of files) {
+        const name = String(file && file.name || '').replace(/[\\/:*?"<>|]/g, '_').trim();
+        if (!name) continue;
+        const text = String(file.text == null ? '' : file.text);
+        const sub2 = sub + name;
+        const downloadOnce = (url) => new Promise((resolve) => {
+          try {
+            chrome.downloads.download({
+              url,
+              filename: sub2,
+              conflictAction: 'uniquify',
+              saveAs: false
+            }, (id) => {
+              if (chrome.runtime.lastError) resolve({ error: chrome.runtime.lastError.message });
+              else resolve({ id });
+            });
+          } catch (e) {
+            resolve({ error: String(e.message || e) });
+          }
+        });
+        let downloadId = { error: 'no_url' };
+        if (typeof Blob !== 'undefined' && typeof URL !== 'undefined' && URL.createObjectURL) {
+          let blobUrl = '';
+          try {
+            blobUrl = URL.createObjectURL(new Blob([text], { type: 'text/markdown;charset=utf-8' }));
+            downloadId = await downloadOnce(blobUrl);
+          } catch (e) {
+            downloadId = { error: String(e.message || e) };
+          }
+          setTimeout(() => { if (blobUrl) { try { URL.revokeObjectURL(blobUrl); } catch { /* 忽略 */ } } }, 60000);
+        }
+        if (downloadId.error) {
+          // Blob 路线不可用时退回 data: URL（短文件可用）
+          const dataUrl = 'data:text/markdown;charset=utf-8,' + encodeURIComponent(text);
+          downloadId = await downloadOnce(dataUrl);
+        }
+        if (downloadId.error) { respond({ ok: false, error: downloadId.error, written }); return; }
+        written.push(name);
+      }
+      respond({ ok: true, dir: sub, files: written });
+    })();
+    return true;
+  }
+
+  /*
+   * 列出「课程归档」相关的历史下载，供归档面板判断旧格式与去重。
+   * chrome.downloads 只能看到下载记录，看不到磁盘上的任意文件：
+   * 这里按文件名过滤，返回 name，不读内容。
+   */
+  if (msg.type === 'archiveListExisting') {
+    (async () => {
+      try {
+        const items = await chrome.downloads.search({ limit: 1000, orderBy: ['-startTime'] });
+        const files = (items || [])
+          .map((item) => String(item.filename || '').split(/[\\/]/).pop() || '')
+          .filter((name) => /\.md$/i.test(name))
+          .map((name) => ({ name }));
+        respond({ ok: true, files });
+      } catch (e) {
+        respond({ ok: false, error: String(e && e.message || e) });
+      }
+    })();
+    return true;
+  }
+
   return undefined;
 });

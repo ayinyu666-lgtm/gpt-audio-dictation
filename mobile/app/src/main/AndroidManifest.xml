@@ -1,0 +1,19 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Only for the optional, user-started microphone probe; never used automatically. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Optional high-speed frame source; the activity asks for consent on every start. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <queries><package android:name="com.openai.chatgpt" /></queries>
+    <application android:allowBackup="false" android:label="听写助手" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:usesCleartextTraffic="false">
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+        </activity>
+        <service android:name=".DictationService" android:exported="true" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" android:label="听写助手">
+            <intent-filter><action android:name="android.accessibilityservice.AccessibilityService"/></intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/accessibility_service"/>
+        </service>
+        <service android:name=".ProjectionService" android:exported="false" android:foregroundServiceType="mediaProjection" />
+    </application>
+</manifest>

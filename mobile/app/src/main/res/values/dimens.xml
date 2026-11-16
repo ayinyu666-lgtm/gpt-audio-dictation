@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="gad_space_page">16dp</dimen>
+    <dimen name="gad_space_between_sections">22dp</dimen>
+    <dimen name="gad_space_card_gap">12dp</dimen>
+    <dimen name="gad_card_padding">16dp</dimen>
+    <dimen name="gad_card_radius">14dp</dimen>
+    <dimen name="gad_touch_min">44dp</dimen>
+</resources>

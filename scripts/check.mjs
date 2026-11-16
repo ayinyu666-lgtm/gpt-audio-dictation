@@ -7,13 +7,15 @@ const jsFiles = [
   'extension/background.js',
   'extension/page-hook.js',
   'extension/panel.js',
+  'extension/archive-import.js',
   'writer/writer.mjs',
-  'tools/dev/cdp.mjs',
-  'tools/dev/append-conversation.mjs',
-  'tools/dev/newtab.mjs',
-  'tools/dev/probe.mjs',
-  'tools/dev/shot.mjs',
-  'tools/dev/synthetic-page-test.js'
+  'tools/mobile-archive/archive.mjs',
+  'tools/mobile-archive/cli.mjs',
+  'tools/mobile-archive/browser-client.mjs',
+  'tools/mobile-archive/export-from-browser.mjs',
+  'tools/mobile-archive/local-export.mjs',
+  'tools/mobile-archive/local-export.test.mjs',
+  'tools/mobile-archive/test.mjs'
 ];
 
 for (const relative of jsFiles) {

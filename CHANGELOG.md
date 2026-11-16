@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.0 - 2026-11-16
+
+- Added the Android dictation assistant source, host tests, and an installable APK.
+- Added the browser conversation-archive section and its local Markdown/ZIP export path.
+- Added the `mobile-archive` tool for validated, immutable local snapshots from exported conversations.
+- Added phone installation, permissions, privacy, test, and build documentation with portable paths.
+- Kept internal classroom validation records and machine-specific test artifacts out of the public package.
+
 ## 1.3.2 - 2026-10-22
 
 - Fixed a corrupted subfolder name (a pasted prompt containing `/`) silently failing every archive write with `invalid_subdir`.

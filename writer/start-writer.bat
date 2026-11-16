@@ -6,7 +6,8 @@ cd /d "%~dp0"
 set "NODE_EXE="
 where node >nul 2>nul
 if not errorlevel 1 set "NODE_EXE=node"
-if not defined NODE_EXE if exist "E:\AI\node-v24.12.0-win-x64\node.exe" set "NODE_EXE=E:\AI\node-v24.12.0-win-x64\node.exe"
+if not defined NODE_EXE if exist "%ProgramFiles%\nodejs\node.exe" set "NODE_EXE=%ProgramFiles%\nodejs\node.exe"
+if not defined NODE_EXE if defined LOCALAPPDATA if exist "%LOCALAPPDATA%\Programs\nodejs\node.exe" set "NODE_EXE=%LOCALAPPDATA%\Programs\nodejs\node.exe"
 if not defined NODE_EXE (
   echo [ERROR] Node.js not found. Install Node.js 22+ first.
   pause

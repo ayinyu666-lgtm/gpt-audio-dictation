@@ -502,6 +502,25 @@
     .log .t { color: #59616f; flex: none; }
     .log .m { color: #c3cbd8; word-break: break-word; }
     .log.ok .m { color: #3ddc84; } .log.warn .m { color: #ffb020; } .log.error .m { color: #ff5d5d; }
+    .arcRange { display: flex; align-items: center; gap: 6px; font-size: 11.5px; }
+    .arcRange input[type=date] {
+      all: unset; flex: 1 1 0; min-width: 0; padding: 3px 6px; border-radius: 6px;
+      background: #0e1116; border: 1px solid #2b3140; color: #e8ebf0; font-size: 11.5px;
+    }
+    .arcRangeLabel { color: #97a0b0; white-space: nowrap; }
+    .arcList { max-height: 190px; overflow: auto; display: flex; flex-direction: column; gap: 3px; }
+    .arcRow { display: flex; align-items: flex-start; gap: 7px; padding: 4px 3px; border-bottom: 1px dashed #232833; }
+    .arcRow:last-child { border-bottom: 0; }
+    .arcRow input[type=checkbox] { all: unset; width: 13px; height: 13px; margin-top: 2px; border: 1px solid #3a4356; border-radius: 3px; background: #0e1116; cursor: pointer; flex: none; }
+    .arcRow input[type=checkbox]:checked { background: #1d4ed8; border-color: #1d4ed8; }
+    .arcMain { min-width: 0; flex: 1 1 auto; }
+    .arcTitle { font-size: 12px; color: #e8ebf0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .arcMeta { font-size: 10.5px; color: #7d8698; margin-top: 1px; }
+    .arcBadge { display: inline-block; font-size: 9.5px; color: #8b93a3; border: 1px solid #2b3140; border-radius: 4px; padding: 0 3px; margin-top: 2px; }
+    .arcOptions { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #97a0b0; flex-wrap: wrap; }
+    .arcOptions input[type=checkbox] { all: unset; width: 13px; height: 13px; border: 1px solid #3a4356; border-radius: 3px; background: #0e1116; cursor: pointer; }
+    .arcOptions input[type=checkbox]:checked { background: #1d4ed8; border-color: #1d4ed8; }
+    .arcCheck { margin-right: 6px; }
       `;
 
   function el(tag, cls, text) {
@@ -809,9 +828,21 @@
   const segsBox = el('div', 'segs');
   const logsBox = el('div', 'logs');
 
+  // 归档（会话列表 -> 日期范围 -> 保存为 Markdown）
+  // 模块在 manifest 里先于 panel.js 加载；宿主页面测试时可能没有，做存在性判断。
+  let archiveSection = null;
+  try {
+    if (globalThis.GadArchive && typeof globalThis.GadArchive.mountSection === 'function') {
+      archiveSection = globalThis.GadArchive.mountSection(null, {});
+    }
+  } catch (e) {
+    console.warn('[gad] 归档模块初始化失败', e);
+  }
+  const secArchive = archiveSection ? archiveSection.section : el('div', 'sec', '归档模块未加载');
+
   body.append(
     setupRow, rowActions, meterWrap, grid, why,
-    secPolicy, secNoise, secSave, secAuto,
+    secPolicy, secNoise, secSave, secArchive, secAuto,
     adv,
     el('div', 'hint', '分段记录'), segsBox,
     el('div', 'hint', '日志'), logsBox
